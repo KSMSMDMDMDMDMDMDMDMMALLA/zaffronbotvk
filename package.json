@@ -1,0 +1,24 @@
+{
+  "name": "vk-empty-bot",
+  "version": "1.0.0",
+  "description": "Минимальный VK-бот на Node.js с SQLite",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "axios": "^1.18.1",
+    "better-sqlite3": "^12.11.1",
+    "dotenv": "^17.2.3",
+    "form-data": "^4.0.6",
+    "google-tts-api": "^2.0.2",
+    "qrcode": "^1.5.4",
+    "sharp": "^0.35.3",
+    "sql.js": "^1.14.1",
+    "vk-io": "^4.10.0"
+  }
+}
