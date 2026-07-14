@@ -1,4 +1,4 @@
-FROM node:18-bookworm-slim
+FROM node:22-bookworm-slim
 
 WORKDIR /app
 
@@ -15,4 +15,4 @@ RUN npm ci --omit=dev
 
 COPY . .
 
-CMD ["node", "index.js"]
+CMD ["node", "src/index.js"]
