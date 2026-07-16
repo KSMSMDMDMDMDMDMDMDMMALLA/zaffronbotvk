@@ -2,7 +2,8 @@ const {
   formatMoney,
   getBalance,
   applyGamePenalty,
-  applyGameReward
+  applyGameReward,
+  incrementQuestStat
 } = require('./database');
 
 const crypto = require('node:crypto');
@@ -36,6 +37,37 @@ const REACTION_COOLDOWN =
 
 const CASINO_COOLDOWN =
   3 * 1000;
+
+/*
+ * Казино должно выводить деньги из экономики,
+ * а не бесконечно создавать их.
+ *
+ * Вероятности:
+ *  - x0–x0.4            — 18%
+ *  - x0.5–x0.9          — 27%
+ *  - x1                 — 15%
+ *  - x1.1–x1.5          — 32%
+ *  - x1.6–x2            — 7%
+ *  - x2.1–x3            — 1%
+ *
+ * Средняя выплата составляет x0.9425.
+ */
+const CASINO_MULTIPLIER_BRACKETS =
+  Object.freeze([
+    { weight: 1800, min: 0, max: 4 },
+    { weight: 2700, min: 5, max: 9 },
+    { weight: 1500, min: 10, max: 10 },
+    { weight: 3200, min: 11, max: 15 },
+    { weight: 700, min: 16, max: 20 },
+    { weight: 100, min: 21, max: 30 }
+  ]);
+
+const CASINO_TOTAL_WEIGHT =
+  CASINO_MULTIPLIER_BRACKETS.reduce(
+    (total, bracket) =>
+      total + bracket.weight,
+    0
+  );
 
 const GUESS_COOLDOWN =
   5 * 60 * 1000;
@@ -91,6 +123,37 @@ function randomInteger(min, max) {
   return Math.floor(
     Math.random() * (max - min + 1)
   ) + min;
+}
+
+function getCasinoMultiplierTenths() {
+  const roll = crypto.randomInt(
+    0,
+    CASINO_TOTAL_WEIGHT
+  );
+
+  let accumulatedWeight = 0;
+
+  for (
+    const bracket of
+      CASINO_MULTIPLIER_BRACKETS
+  ) {
+    accumulatedWeight += bracket.weight;
+
+    if (roll >= accumulatedWeight) {
+      continue;
+    }
+
+    if (bracket.min === bracket.max) {
+      return bracket.min;
+    }
+
+    return crypto.randomInt(
+      bracket.min,
+      bracket.max + 1
+    );
+  }
+
+  return 0;
 }
 
 function getPlayerKey(peerId, userId) {
@@ -423,6 +486,11 @@ async function startHotPotato(
   hotPotatoGames.set(
     peerId,
     game
+  );
+
+  incrementQuestStat(
+    userId,
+    'potato_played'
   );
 
   await context.send(
@@ -1187,8 +1255,13 @@ async function playCasino(
     );
   }
 
+  incrementQuestStat(
+    userId,
+    'casino_played'
+  );
+
   const multiplierTenths =
-    crypto.randomInt(0, 31);
+    getCasinoMultiplierTenths();
 
   const multiplier =
     multiplierTenths / 10;
@@ -1236,6 +1309,11 @@ async function playCasino(
     settlementText =
       settlementLines.join('\n');
   } else if (netResult < 0) {
+    incrementQuestStat(
+      userId,
+      'casino_losses'
+    );
+
     const penaltyResult = applyGamePenalty(
       userId,
       Math.abs(netResult)
@@ -1444,6 +1522,11 @@ async function guessNumber(
   }
 
   guessGames.delete(peerId);
+
+  incrementQuestStat(
+    userId,
+    'guess_wins'
+  );
 
   const rewardResult =
     applyGameReward(

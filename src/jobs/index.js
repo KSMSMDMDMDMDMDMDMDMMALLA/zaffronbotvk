@@ -269,7 +269,8 @@ async function sendJobsList(context) {
     `${formatExperience(profile.level, profile.experience)}\n\n` +
     `${lines.join('\n\n')}\n\n` +
     'За каждую завершённую смену начисляется 1 EXP.\n' +
-    'На 10 уровне EXP продолжает копиться в статистику.'
+    'После 10 уровня новые работы не открываются, но уровень продолжает расти на последней работе.\n' +
+    'Максимальный уровень игрока — 50.'
   );
 
   return true;

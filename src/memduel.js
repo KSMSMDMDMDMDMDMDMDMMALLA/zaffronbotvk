@@ -6,7 +6,8 @@ const {
 
 const {
   formatMoney,
-  applyGameReward
+  applyGameReward,
+  incrementQuestStat
 } = require('./database');
 
 /*
@@ -585,6 +586,15 @@ async function finishDuel(
       users,
       duel.opponentId
     );
+
+  incrementQuestStat(
+    duel.challengerId,
+    'memduels_played'
+  );
+  incrementQuestStat(
+    duel.opponentId,
+    'memduels_played'
+  );
 
   /*
    * При счёте 5:5 награда не выдаётся.

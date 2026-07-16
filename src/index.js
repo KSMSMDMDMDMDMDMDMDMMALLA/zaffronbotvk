@@ -15,6 +15,7 @@ const jobs = require('./jobs');
 const magazine = require('./magazine');
 const business = require('./business');
 const bank = require('./bank');
+const quests = require('./quests');
 const transfer = require('./transfer');
 
 const {
@@ -28,7 +29,8 @@ const {
   getBalance,
   getBalanceTop,
   getGameDebt,
-  getJobProfile
+  getJobProfile,
+  incrementQuestStat
 } = require('./database');
 
 const fs = require('fs');
@@ -425,6 +427,10 @@ if (await bank.handle(context)) {
   return;
 }
 
+if (await quests.handle(context)) {
+  return;
+}
+
 if (await jobs.handle(context, vk)) {
   return;
 }
@@ -744,7 +750,7 @@ if (payload?.command === 'commands') {
 ├ 🏆 !топ баланс — топ по балансу
 ├ 🎟  !promo [код] — активировать промокод
 ├ 📋 !команды — список команд
-└ ❓ FAQ -
+└ ❓ FAQ - https://vk.ru/@zaffron-komandy-bot-zaffron
 
 💵 Заработок
 │
@@ -752,6 +758,7 @@ if (payload?.command === 'commands') {
 ├ 📦 !имущество — управление имуществом
 ├ 🏢 !бизнес — управление бизнесами
 ├ 🏦 !банк — вклад и проценты
+├ 📜 !квесты — задания и награды
 ├ 💼 !работы — список работ
 ├ 👷 !работать [работа]
 
@@ -865,6 +872,11 @@ if (/^!топ\s+баланс(?:а)?$/i.test(originalText)) {
 }
 
 if (isProfileCommand) {
+  incrementQuestStat(
+    Number(context.senderId),
+    'profile_views'
+  );
+
   let user = getUserByVkId(context.senderId);
 
   if (!user) {
@@ -979,7 +991,7 @@ if (/^!команды$/i.test(originalText)) {
 ├ 🏆 !топ баланс — топ по балансу
 ├ 🎟  !promo [код] — активировать промокод
 ├ 📋 !команды — список команд
-└ ❓ FAQ -
+└ ❓ FAQ - https://vk.ru/@zaffron-komandy-bot-zaffron
 
 💵 Заработок
 │
@@ -987,6 +999,7 @@ if (/^!команды$/i.test(originalText)) {
 ├ 📦 !имущество — управление имуществом
 ├ 🏢 !бизнес — управление бизнесами
 ├ 🏦 !банк — вклад и проценты
+├ 📜 !квесты — задания и награды
 ├ 💼 !работы — список работ
 ├ 👷 !работать [работа]
 

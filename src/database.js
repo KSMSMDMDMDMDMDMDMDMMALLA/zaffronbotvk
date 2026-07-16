@@ -16,7 +16,7 @@ const databasePath = path.join(
 let db = null;
 
 const GAME_DEBT_LIMIT = 25;
-const JOB_MAX_LEVEL = 10;
+const JOB_MAX_LEVEL = 50;
 const BUSINESS_MAX_UPGRADE_LEVEL = 5;
 const BANK_MAX_INTEREST_HOURS = 72;
 
@@ -68,7 +68,19 @@ function getJobExperienceRequired(level) {
     return null;
   }
 
-  return JOB_EXP_REQUIREMENTS[safeLevel] ?? null;
+  if (JOB_EXP_REQUIREMENTS[safeLevel]) {
+    return JOB_EXP_REQUIREMENTS[safeLevel];
+  }
+
+  if (safeLevel >= 10 && safeLevel < 45) {
+    return 45;
+  }
+
+  if (safeLevel >= 45 && safeLevel < 50) {
+    return 10;
+  }
+
+  return null;
 }
 
 function formatMoney(value) {
@@ -318,6 +330,205 @@ async function initializeDatabase() {
         vk_id
       )
     );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS quest_stats (
+      vk_id INTEGER NOT NULL,
+      stat_key TEXT NOT NULL,
+      value INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+      PRIMARY KEY (
+        vk_id,
+        stat_key
+      ),
+
+      CHECK (value >= 0)
+    );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS quest_claims (
+      vk_id INTEGER NOT NULL,
+      quest_key TEXT NOT NULL,
+      claimed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+      PRIMARY KEY (
+        vk_id,
+        quest_key
+      )
+    );
+  `);
+
+  db.run(`
+    CREATE TRIGGER IF NOT EXISTS quest_balance_peak_insert
+    AFTER INSERT ON balances
+    BEGIN
+      INSERT INTO quest_stats (
+        vk_id,
+        stat_key,
+        value
+      )
+      VALUES (
+        NEW.vk_id,
+        'balance_peak',
+        MAX(0, NEW.dollars)
+      )
+
+      ON CONFLICT(vk_id, stat_key)
+      DO UPDATE SET
+        value = MAX(value, excluded.value),
+        updated_at = CURRENT_TIMESTAMP;
+    END;
+  `);
+
+  db.run(`
+    CREATE TRIGGER IF NOT EXISTS quest_balance_peak_update
+    AFTER UPDATE OF dollars ON balances
+    BEGIN
+      INSERT INTO quest_stats (
+        vk_id,
+        stat_key,
+        value
+      )
+      VALUES (
+        NEW.vk_id,
+        'balance_peak',
+        MAX(0, NEW.dollars)
+      )
+
+      ON CONFLICT(vk_id, stat_key)
+      DO UPDATE SET
+        value = MAX(value, excluded.value),
+        updated_at = CURRENT_TIMESTAMP;
+    END;
+  `);
+
+  db.run(`
+    CREATE TRIGGER IF NOT EXISTS quest_aura_peak_insert
+    AFTER INSERT ON aura
+    BEGIN
+      INSERT INTO quest_stats (
+        vk_id,
+        stat_key,
+        value
+      )
+      VALUES (
+        NEW.vk_id,
+        'aura_peak',
+        MAX(
+          0,
+          COALESCE((
+            SELECT SUM(aura)
+            FROM aura
+            WHERE vk_id = NEW.vk_id
+          ), 0)
+        )
+      )
+
+      ON CONFLICT(vk_id, stat_key)
+      DO UPDATE SET
+        value = MAX(value, excluded.value),
+        updated_at = CURRENT_TIMESTAMP;
+    END;
+  `);
+
+  db.run(`
+    CREATE TRIGGER IF NOT EXISTS quest_aura_peak_update
+    AFTER UPDATE OF aura ON aura
+    BEGIN
+      INSERT INTO quest_stats (
+        vk_id,
+        stat_key,
+        value
+      )
+      VALUES (
+        NEW.vk_id,
+        'aura_peak',
+        MAX(
+          0,
+          COALESCE((
+            SELECT SUM(aura)
+            FROM aura
+            WHERE vk_id = NEW.vk_id
+          ), 0)
+        )
+      )
+
+      ON CONFLICT(vk_id, stat_key)
+      DO UPDATE SET
+        value = MAX(value, excluded.value),
+        updated_at = CURRENT_TIMESTAMP;
+    END;
+  `);
+
+  db.run(`
+    CREATE TRIGGER IF NOT EXISTS quest_job_started
+    AFTER INSERT ON active_jobs
+    BEGIN
+      INSERT INTO quest_stats (
+        vk_id,
+        stat_key,
+        value
+      )
+      VALUES (
+        NEW.vk_id,
+        'jobs_started',
+        1
+      )
+
+      ON CONFLICT(vk_id, stat_key)
+      DO UPDATE SET
+        value = value + 1,
+        updated_at = CURRENT_TIMESTAMP;
+    END;
+  `);
+
+  db.run(`
+    CREATE TRIGGER IF NOT EXISTS quest_business_bought
+    AFTER INSERT ON magazine_assets
+    WHEN NEW.item_type = 'businesses'
+    BEGIN
+      INSERT INTO quest_stats (
+        vk_id,
+        stat_key,
+        value
+      )
+      VALUES (
+        NEW.vk_id,
+        'businesses_bought',
+        1
+      )
+
+      ON CONFLICT(vk_id, stat_key)
+      DO UPDATE SET
+        value = value + 1,
+        updated_at = CURRENT_TIMESTAMP;
+    END;
+  `);
+
+  db.run(`
+    CREATE TRIGGER IF NOT EXISTS quest_villa_bought
+    AFTER INSERT ON magazine_assets
+    WHEN NEW.item_key = 'house-villa'
+    BEGIN
+      INSERT INTO quest_stats (
+        vk_id,
+        stat_key,
+        value
+      )
+      VALUES (
+        NEW.vk_id,
+        'villas_bought',
+        1
+      )
+
+      ON CONFLICT(vk_id, stat_key)
+      DO UPDATE SET
+        value = value + 1,
+        updated_at = CURRENT_TIMESTAMP;
+    END;
   `);
 
   persistDatabase();
@@ -1277,6 +1488,61 @@ function getJobProfile(vkId) {
   statement.free();
 
   return profile;
+}
+
+function calculateJobExperienceProgress(
+  profile,
+  amount
+) {
+  const safeAmount = Number(amount);
+
+  if (
+    !Number.isSafeInteger(safeAmount) ||
+    safeAmount < 0
+  ) {
+    throw new Error(
+      'Количество EXP должно быть неотрицательным целым числом'
+    );
+  }
+
+  let level = Math.min(
+    JOB_MAX_LEVEL,
+    Math.max(
+      1,
+      Number(profile.level) || 1
+    )
+  );
+  let experience = Math.max(
+    0,
+    Number(profile.experience) || 0
+  ) + safeAmount;
+  let levelsGained = 0;
+
+  while (level < JOB_MAX_LEVEL) {
+    const required =
+      getJobExperienceRequired(level);
+
+    if (
+      required === null ||
+      experience < required
+    ) {
+      break;
+    }
+
+    experience -= required;
+    level += 1;
+    levelsGained += 1;
+  }
+
+  return {
+    level,
+    experience,
+    experienceRequired:
+      getJobExperienceRequired(level),
+    levelsGained,
+    leveledUp: levelsGained > 0,
+    isMaxLevel: level >= JOB_MAX_LEVEL
+  };
 }
 
 function getMagazineAssets(vkId) {
@@ -3166,29 +3432,19 @@ function completeJob({
       ? safeSalary * 2
       : safeSalary;
 
-  let level =
-    currentProfile.level;
-
-  let experience =
-    currentProfile.experience +
-    experienceEarned;
-
-  let leveledUp = false;
-
-  const experienceRequired =
-    getJobExperienceRequired(level);
-
-  if (
-    experienceRequired !== null &&
-    experience >= experienceRequired
-  ) {
-    experience -= experienceRequired;
-    level += 1;
-    leveledUp = true;
-  }
-
-  const nextExperienceRequired =
-    getJobExperienceRequired(level);
+  const experienceProgress =
+    calculateJobExperienceProgress(
+      currentProfile,
+      experienceEarned
+    );
+  const {
+    level,
+    experience,
+    experienceRequired:
+      nextExperienceRequired,
+    leveledUp,
+    levelsGained
+  } = experienceProgress;
 
   try {
     db.run('BEGIN TRANSACTION;');
@@ -3282,7 +3538,551 @@ function completeJob({
       boostCount:
         currentBoostCount -
         (boostUsed ? 1 : 0),
-      leveledUp
+      leveledUp,
+      levelsGained
+    };
+  } catch (error) {
+    try {
+      db.run('ROLLBACK;');
+    } catch {
+      // Транзакция могла не успеть начаться.
+    }
+
+    throw error;
+  }
+}
+
+function validateQuestStatKey(statKey) {
+  const safeStatKey =
+    String(statKey ?? '').trim();
+
+  if (!/^[a-z0-9_-]{1,64}$/i.test(safeStatKey)) {
+    throw new Error(
+      'Некорректный ключ статистики квеста'
+    );
+  }
+
+  return safeStatKey;
+}
+
+function getQuestStat(vkId, statKey) {
+  ensureDatabase();
+
+  const safeVkId = Number(vkId);
+  const safeStatKey =
+    validateQuestStatKey(statKey);
+
+  if (!Number.isInteger(safeVkId)) {
+    throw new Error(
+      'VK ID должен быть целым числом'
+    );
+  }
+
+  const statement = db.prepare(`
+    SELECT value
+    FROM quest_stats
+    WHERE vk_id = ?
+      AND stat_key = ?
+  `);
+
+  statement.bind([
+    safeVkId,
+    safeStatKey
+  ]);
+
+  let value = 0;
+
+  if (statement.step()) {
+    value = Math.max(
+      0,
+      Number(
+        statement.getAsObject().value
+      ) || 0
+    );
+  }
+
+  statement.free();
+
+  return value;
+}
+
+function incrementQuestStat(
+  vkId,
+  statKey,
+  amount = 1
+) {
+  ensureDatabase();
+
+  const safeVkId = Number(vkId);
+  const safeStatKey =
+    validateQuestStatKey(statKey);
+  const safeAmount = Number(amount);
+
+  if (!Number.isInteger(safeVkId)) {
+    throw new Error(
+      'VK ID должен быть целым числом'
+    );
+  }
+
+  if (
+    !Number.isSafeInteger(safeAmount) ||
+    safeAmount <= 0
+  ) {
+    throw new Error(
+      'Прогресс квеста должен быть положительным целым числом'
+    );
+  }
+
+  db.run(
+    `
+      INSERT INTO quest_stats (
+        vk_id,
+        stat_key,
+        value
+      )
+      VALUES (?, ?, ?)
+
+      ON CONFLICT(vk_id, stat_key)
+      DO UPDATE SET
+        value = value + excluded.value,
+        updated_at = CURRENT_TIMESTAMP
+    `,
+    [
+      safeVkId,
+      safeStatKey,
+      safeAmount
+    ]
+  );
+
+  persistDatabase();
+
+  return getQuestStat(
+    safeVkId,
+    safeStatKey
+  );
+}
+
+function getQuestSnapshot(vkId) {
+  ensureDatabase();
+
+  const safeVkId = Number(vkId);
+
+  if (!Number.isInteger(safeVkId)) {
+    throw new Error(
+      'VK ID должен быть целым числом'
+    );
+  }
+
+  const statsStatement = db.prepare(`
+    SELECT
+      stat_key,
+      value
+    FROM quest_stats
+    WHERE vk_id = ?
+  `);
+
+  statsStatement.bind([safeVkId]);
+
+  const stats = {};
+
+  while (statsStatement.step()) {
+    const row =
+      statsStatement.getAsObject();
+
+    stats[String(row.stat_key)] = Math.max(
+      0,
+      Number(row.value) || 0
+    );
+  }
+
+  statsStatement.free();
+
+  const claimsStatement = db.prepare(`
+    SELECT quest_key
+    FROM quest_claims
+    WHERE vk_id = ?
+  `);
+
+  claimsStatement.bind([safeVkId]);
+
+  const claimedQuestKeys = new Set();
+
+  while (claimsStatement.step()) {
+    claimedQuestKeys.add(
+      String(
+        claimsStatement
+          .getAsObject()
+          .quest_key
+      )
+    );
+  }
+
+  claimsStatement.free();
+
+  const promoStatement = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM promo_redemptions
+    WHERE vk_id = ?
+  `);
+
+  promoStatement.bind([safeVkId]);
+
+  let promosRedeemed = 0;
+
+  if (promoStatement.step()) {
+    promosRedeemed = Number(
+      promoStatement
+        .getAsObject()
+        .count
+    ) || 0;
+  }
+
+  promoStatement.free();
+
+  const auraGivenStatement = db.prepare(`
+    SELECT 1
+    FROM aura_cooldowns
+    WHERE sender_id = ?
+      AND last_given_at > 0
+    LIMIT 1
+  `);
+
+  auraGivenStatement.bind([safeVkId]);
+  const hasGivenAura =
+    auraGivenStatement.step();
+  auraGivenStatement.free();
+
+  const profile = getJobProfile(safeVkId);
+  const assets = getMagazineAssets(safeVkId);
+  const businessCount = assets.filter(
+    asset => asset.itemType === 'businesses'
+  ).length;
+  const hasVilla = assets.some(
+    asset => asset.itemKey === 'house-villa'
+  );
+  const hasStartedJob =
+    profile.completedShifts > 0 ||
+    Boolean(getActiveJob(safeVkId));
+
+  stats.jobs_started = Math.max(
+    stats.jobs_started || 0,
+    hasStartedJob ? 1 : 0
+  );
+  stats.businesses_bought = Math.max(
+    stats.businesses_bought || 0,
+    businessCount > 0 ? 1 : 0
+  );
+  stats.villas_bought = Math.max(
+    stats.villas_bought || 0,
+    hasVilla ? 1 : 0
+  );
+  stats.aura_peak = Math.max(
+    stats.aura_peak || 0,
+    getTotalAura(safeVkId)
+  );
+  stats.balance_peak = Math.max(
+    stats.balance_peak || 0,
+    getBalance(safeVkId)
+  );
+  stats.promos_redeemed = Math.max(
+    stats.promos_redeemed || 0,
+    promosRedeemed
+  );
+  stats.aura_given = Math.max(
+    stats.aura_given || 0,
+    hasGivenAura ? 1 : 0
+  );
+
+  return {
+    stats,
+    claimedQuestKeys,
+    level: profile.level,
+    experience: profile.experience
+  };
+}
+
+function hasClaimedQuest(vkId, questKey) {
+  const snapshot = getQuestSnapshot(vkId);
+
+  return snapshot.claimedQuestKeys.has(
+    String(questKey)
+  );
+}
+
+function claimQuestReward({
+  vkId,
+  questKey,
+  rewards
+}) {
+  ensureDatabase();
+
+  const safeVkId = Number(vkId);
+  const safeQuestKey =
+    String(questKey ?? '').trim();
+
+  if (!Number.isInteger(safeVkId)) {
+    throw new Error(
+      'VK ID должен быть целым числом'
+    );
+  }
+
+  if (!/^[a-z0-9_-]{1,64}$/i.test(safeQuestKey)) {
+    throw new Error(
+      'Некорректный ключ квеста'
+    );
+  }
+
+  if (hasClaimedQuest(safeVkId, safeQuestKey)) {
+    return {
+      status: 'already_claimed'
+    };
+  }
+
+  const dollars = Number(rewards?.dollars ?? 0);
+  const aura = Number(rewards?.aura ?? 0);
+  const boosts = Number(rewards?.boosts ?? 0);
+  const experienceEarned = Number(
+    rewards?.experience ?? 0
+  );
+
+  for (const [label, value] of [
+    ['долларов', dollars],
+    ['ауры', aura],
+    ['бустов', boosts],
+    ['EXP', experienceEarned]
+  ]) {
+    if (
+      !Number.isSafeInteger(value) ||
+      value < 0
+    ) {
+      throw new Error(
+        `Некорректная награда: ${label}`
+      );
+    }
+  }
+
+  const asset = rewards?.asset ?? null;
+  let assetAlreadyOwned = false;
+  let assetCompensation = 0;
+
+  if (asset) {
+    const itemKey =
+      String(asset.itemKey ?? '').trim();
+    const itemType =
+      String(asset.itemType ?? '').trim();
+    const price = Number(asset.price);
+
+    if (
+      !itemKey ||
+      !itemType ||
+      !Number.isSafeInteger(price) ||
+      price <= 0
+    ) {
+      throw new Error(
+        'Некорректная награда имуществом'
+      );
+    }
+
+    assetAlreadyOwned = getMagazineAssets(
+      safeVkId
+    ).some(item => item.itemKey === itemKey);
+
+    if (assetAlreadyOwned) {
+      assetCompensation = Math.floor(
+        price * 0.7
+      );
+    }
+  }
+
+  const totalDollars =
+    dollars + assetCompensation;
+  const currentBalance =
+    getBalance(safeVkId);
+
+  if (
+    !Number.isSafeInteger(totalDollars) ||
+    currentBalance >
+      Number.MAX_SAFE_INTEGER - totalDollars
+  ) {
+    return {
+      status: 'balance_limit'
+    };
+  }
+
+  const currentProfile =
+    getJobProfile(safeVkId);
+  const experienceProgress =
+    calculateJobExperienceProgress(
+      currentProfile,
+      experienceEarned
+    );
+
+  try {
+    db.run('BEGIN TRANSACTION;');
+
+    db.run(
+      `
+        INSERT INTO quest_claims (
+          vk_id,
+          quest_key
+        )
+        VALUES (?, ?)
+      `,
+      [
+        safeVkId,
+        safeQuestKey
+      ]
+    );
+
+    if (totalDollars > 0) {
+      db.run(
+        `
+          INSERT INTO balances (
+            vk_id,
+            dollars
+          )
+          VALUES (?, ?)
+
+          ON CONFLICT(vk_id)
+          DO UPDATE SET
+            dollars = dollars + excluded.dollars
+        `,
+        [
+          safeVkId,
+          totalDollars
+        ]
+      );
+    }
+
+    if (aura > 0) {
+      db.run(
+        `
+          INSERT INTO aura (
+            peer_id,
+            vk_id,
+            aura
+          )
+          VALUES (0, ?, ?)
+
+          ON CONFLICT(peer_id, vk_id)
+          DO UPDATE SET
+            aura = aura + excluded.aura
+        `,
+        [
+          safeVkId,
+          aura
+        ]
+      );
+    }
+
+    if (boosts > 0) {
+      db.run(
+        `
+          INSERT INTO job_boosts (
+            vk_id,
+            quantity
+          )
+          VALUES (?, ?)
+
+          ON CONFLICT(vk_id)
+          DO UPDATE SET
+            quantity = quantity + excluded.quantity
+        `,
+        [
+          safeVkId,
+          boosts
+        ]
+      );
+    }
+
+    if (experienceEarned > 0) {
+      db.run(
+        `
+          INSERT INTO job_profiles (
+            vk_id,
+            level,
+            experience,
+            completed_shifts
+          )
+          VALUES (?, ?, ?, ?)
+
+          ON CONFLICT(vk_id)
+          DO UPDATE SET
+            level = excluded.level,
+            experience = excluded.experience
+        `,
+        [
+          safeVkId,
+          experienceProgress.level,
+          experienceProgress.experience,
+          currentProfile.completedShifts
+        ]
+      );
+    }
+
+    if (asset && !assetAlreadyOwned) {
+      db.run(
+        `
+          INSERT INTO magazine_assets (
+            vk_id,
+            item_key,
+            item_type
+          )
+          VALUES (?, ?, ?)
+        `,
+        [
+          safeVkId,
+          String(asset.itemKey),
+          String(asset.itemType)
+        ]
+      );
+
+      if (asset.itemType === 'businesses') {
+        db.run(
+          `
+            INSERT OR IGNORE INTO business_states (
+              vk_id,
+              item_key,
+              last_income_at
+            )
+            VALUES (?, ?, ?)
+          `,
+          [
+            safeVkId,
+            String(asset.itemKey),
+            Date.now()
+          ]
+        );
+      }
+    }
+
+    db.run('COMMIT;');
+
+    persistDatabase();
+
+    return {
+      status: 'claimed',
+      dollars,
+      aura,
+      boosts,
+      experienceEarned,
+      level: experienceProgress.level,
+      experience: experienceProgress.experience,
+      levelsGained:
+        experienceProgress.levelsGained,
+      asset: asset
+        ? {
+          itemKey: String(asset.itemKey),
+          title: String(
+            asset.title ?? asset.itemKey
+          ),
+          granted: !assetAlreadyOwned,
+          compensation: assetCompensation
+        }
+        : null,
+      balance: getBalance(safeVkId),
+      totalAura: getTotalAura(safeVkId),
+      boostCount: getJobBoostCount(safeVkId)
     };
   } catch (error) {
     try {
@@ -3839,6 +4639,7 @@ module.exports = {
   applyGameReward,
 
   getJobProfile,
+  calculateJobExperienceProgress,
   getMagazineAssets,
   getJobBoostCount,
   purchaseMagazineItem,
@@ -3864,6 +4665,11 @@ module.exports = {
   getActiveJobs,
   beginJob,
   completeJob,
+  getQuestStat,
+  incrementQuestStat,
+  getQuestSnapshot,
+  hasClaimedQuest,
+  claimQuestReward,
 
   createPromo,
   redeemPromo
