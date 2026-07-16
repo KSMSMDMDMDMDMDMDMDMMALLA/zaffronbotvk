@@ -5,14 +5,15 @@ const {
 } = require('vk-io');
 
 const {
-  addAuraAmount
+  formatMoney,
+  applyGameReward
 } = require('./database');
 
 /*
  * Настройки игры
  */
 const TOTAL_ROUNDS = 10;
-const WINNER_AURA_REWARD = 15;
+const WINNER_DOLLAR_REWARD = 15;
 
 const INVITE_TIMEOUT =
   5 * 60 * 1000;
@@ -602,7 +603,7 @@ async function finishDuel(
           `${duel.scores.challenger}\n` +
           `@id${duel.opponentId} (${opponentName}) — ` +
           `${duel.scores.opponent}\n\n` +
-          'Аура не начислена.'
+          'Награда не начислена.'
       }
     );
 
@@ -625,24 +626,30 @@ async function finishDuel(
       winnerId
     );
 
-  /*
-   * Аура начисляется в беседе,
-   * где была начата игра.
-   *
-   * Для личной игры используем специальный
-   * общий peerId = 0, чтобы награда была общей.
-   */
-  const auraPeerId =
-    duel.mode === 'chat'
-      ? duel.peerId
-      : 0;
-
-  const newAura =
-    addAuraAmount(
-      auraPeerId,
+  const rewardResult =
+    applyGameReward(
       winnerId,
-      WINNER_AURA_REWARD
+      WINNER_DOLLAR_REWARD
     );
+
+  const rewardDetails = [];
+
+  if (rewardResult.debtPaid > 0) {
+    rewardDetails.push(
+      `💳 Погашено долга: ${formatMoney(rewardResult.debtPaid)} $`,
+      `💵 Зачислено на баланс: ${formatMoney(rewardResult.credited)} $`
+    );
+  }
+
+  if (rewardResult.debt > 0) {
+    rewardDetails.push(
+      `🥔 Долг в играх: ${formatMoney(rewardResult.debt)} $`
+    );
+  }
+
+  rewardDetails.push(
+    `💵 Баланс: ${formatMoney(rewardResult.balance)} $`
+  );
 
   await sendToDuel(
     vk,
@@ -655,8 +662,8 @@ async function finishDuel(
         `@id${duel.opponentId} (${opponentName}) — ` +
         `${duel.scores.opponent}\n\n` +
         `👑 Победитель: @id${winnerId} (${winnerName})\n` +
-        `✨ Награда: +${WINNER_AURA_REWARD} ауры\n` +
-        `🌟 Текущая аура: ${newAura}`
+        `💵 Награда: +${formatMoney(WINNER_DOLLAR_REWARD)} $\n` +
+        rewardDetails.join('\n')
     }
   );
 
@@ -887,7 +894,7 @@ async function createDuel(
     `⚔ @id${challengerId} (${challengerName}) ` +
     'вызывает тебя на мем-дуэль!\n\n' +
     `🎮 Раундов: ${TOTAL_ROUNDS}\n` +
-    `✨ Награда: ${WINNER_AURA_REWARD} ауры\n\n` +
+    `💵 Награда: ${formatMoney(WINNER_DOLLAR_REWARD)} $\n\n` +
     'Принять вызов?';
 
   try {

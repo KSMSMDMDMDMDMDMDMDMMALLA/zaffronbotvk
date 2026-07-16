@@ -1,8 +1,11 @@
 const {
-  addAuraAmount,
-  changeAuraAmount,
-  getTotalAura
+  formatMoney,
+  getBalance,
+  applyGamePenalty,
+  applyGameReward
 } = require('./database');
+
+const crypto = require('node:crypto');
 
 /*
  * games2.js
@@ -32,7 +35,7 @@ const REACTION_COOLDOWN =
   10 * 60 * 1000;
 
 const CASINO_COOLDOWN =
-  20 * 1000;
+  3 * 1000;
 
 const GUESS_COOLDOWN =
   5 * 60 * 1000;
@@ -125,6 +128,63 @@ function formatRemainingTime(milliseconds) {
   }
 
   return `${minutes} мин. ${seconds} сек.`;
+}
+
+function formatGamePenalty(result) {
+  const lines = [
+    `💸 Штраф: -${formatMoney(result.penalty)} $`
+  ];
+
+  if (result.paid > 0) {
+    lines.push(
+      `💵 Списано с баланса: ${formatMoney(result.paid)} $`
+    );
+  }
+
+  if (result.debtAdded > 0) {
+    lines.push(
+      `💳 Добавлено в долг: ${formatMoney(result.debtAdded)} $`
+    );
+  }
+
+  if (result.uncollected > 0) {
+    lines.push(
+      `🛡 Долг достиг лимита ${formatMoney(result.debtLimit)} $`
+    );
+  }
+
+  lines.push(
+    `🥔 Долг в играх: ${formatMoney(result.debt)} $`,
+    `💵 Баланс игрока: ${formatMoney(result.balance)} $`
+  );
+
+  return lines.join('\n');
+}
+
+function formatGameReward(result) {
+  const lines = [];
+
+  if (result.debtPaid > 0) {
+    lines.push(
+      `💳 Погашено долга: ${formatMoney(result.debtPaid)} $`
+    );
+
+    lines.push(
+      `💵 Зачислено на баланс: ${formatMoney(result.credited)} $`
+    );
+  }
+
+  if (result.debt > 0) {
+    lines.push(
+      `🥔 Долг в играх: ${formatMoney(result.debt)} $`
+    );
+  }
+
+  lines.push(
+    `💵 Баланс игрока: ${formatMoney(result.balance)} $`
+  );
+
+  return lines.join('\n');
 }
 
 function checkGameCooldown(
@@ -273,10 +333,11 @@ async function sendMessage(
   });
 }
 
-function getRewardPeerId(context) {
+function getGameScopeId(context) {
   /*
-   * В беседе аура записывается в peerId беседы.
-   * В личных сообщениях используется общий peerId = 0.
+   * Используется только для раздельных кулдаунов
+   * в беседах и личных сообщениях.
+   * Сам долларовый баланс общий для всего бота.
    */
   return isChat(context)
     ? Number(context.peerId)
@@ -398,11 +459,10 @@ async function startHotPotato(
           loserId
         );
 
-      const aura =
-        changeAuraAmount(
-          peerId,
+      const penaltyResult =
+        applyGamePenalty(
           loserId,
-          -5
+          5
         );
 
       await sendMessage(
@@ -410,8 +470,7 @@ async function startHotPotato(
         peerId,
         '💥 Картошка взорвалась!\n\n' +
         `Она была у ${mention(loserId, loserName)}.\n` +
-        '✨ Штраф: -5 ауры\n' +
-        `🌟 Теперь у игрока: ${aura}`
+        formatGamePenalty(penaltyResult)
       ).catch(console.error);
     },
     duration
@@ -696,34 +755,31 @@ async function cutBombWire(
     normalizedWire ===
     game.correctWire
   ) {
-    const newAura =
-      addAuraAmount(
-        peerId,
+    const rewardResult =
+      applyGameReward(
         userId,
         3
       );
 
     await context.send(
       '🎉 Бомба обезврежена!\n\n' +
-      `@id${userId} получает +3 ауры.\n` +
-      `🌟 Теперь у него: ${newAura}`
+      `@id${userId} получает +3 $.\n` +
+      formatGameReward(rewardResult)
     );
 
     return true;
   }
 
-  const newAura =
-    changeAuraAmount(
-      peerId,
+  const penaltyResult =
+    applyGamePenalty(
       userId,
-      -3
+      3
     );
 
   await context.send(
     '💥 Неверный провод! Бомба взорвалась.\n\n' +
-    `@id${userId} теряет 3 ауры.\n` +
     `Правильный провод: ${game.correctWire}.\n` +
-    `🌟 Теперь у него: ${newAura}`
+    formatGamePenalty(penaltyResult)
   );
 
   return true;
@@ -870,18 +926,16 @@ async function catchReaction(
 
     reactionGames.delete(peerId);
 
-    const newAura =
-      changeAuraAmount(
-        peerId,
+    const penaltyResult =
+      applyGamePenalty(
         userId,
-        -2
+        2
       );
 
     await context.send(
       `🚫 @id${userId} написал слишком рано!\n\n` +
       'Игра завершена.\n' +
-      '✨ Штраф: -2 ауры\n' +
-      `🌟 Теперь у игрока: ${newAura}`
+      formatGamePenalty(penaltyResult)
     );
 
     return true;
@@ -890,17 +944,16 @@ async function catchReaction(
   game.finished = true;
   reactionGames.delete(peerId);
 
-  const newAura =
-    addAuraAmount(
-      peerId,
+  const rewardResult =
+    applyGameReward(
       userId,
       2
     );
 
   await context.send(
     `⚡ @id${userId} оказался быстрее всех!\n\n` +
-    '✨ Награда: +2 ауры\n' +
-    `🌟 Теперь у игрока: ${newAura}`
+    '💵 Награда: +2 $\n' +
+    formatGameReward(rewardResult)
   );
 
   return true;
@@ -920,7 +973,7 @@ function getCaseDrop() {
     return {
       amount: 50,
       text:
-        '👑 ДЖЕКПОТ! Выпало +50 ауры!'
+        '👑 ДЖЕКПОТ! Выпало +50 $!'
     };
   }
 
@@ -928,7 +981,7 @@ function getCaseDrop() {
     return {
       amount: 10,
       text:
-        '💎 Редкий приз: +10 ауры!'
+        '💎 Редкий приз: +10 $!'
     };
   }
 
@@ -936,7 +989,7 @@ function getCaseDrop() {
     return {
       amount: 5,
       text:
-        '✨ Выпало +5 ауры!'
+        '💵 Выпало +5 $!'
     };
   }
 
@@ -944,7 +997,7 @@ function getCaseDrop() {
     return {
       amount: 2,
       text:
-        '🙂 Выпало +2 ауры.'
+        '🙂 Выпало +2 $.'
     };
   }
 
@@ -952,7 +1005,7 @@ function getCaseDrop() {
     return {
       amount: -2,
       text:
-        '💀 Не повезло: -2 ауры.'
+        '💀 Не повезло: -2 $.'
     };
   }
 
@@ -967,7 +1020,7 @@ async function openCase(
   context
 ) {
   const peerId =
-    getRewardPeerId(context);
+    getGameScopeId(context);
 
   const userId =
     Number(context.senderId);
@@ -1008,31 +1061,37 @@ async function openCase(
   const drop =
     getCaseDrop();
 
-  let totalAura =
-    getTotalAura(userId);
+  let dropText = drop.text;
+  let resultText =
+    `💵 Баланс: ${formatMoney(getBalance(userId))} $`;
 
   if (drop.amount > 0) {
-    totalAura =
-      addAuraAmount(
-        peerId,
+    const rewardResult =
+      applyGameReward(
         userId,
         drop.amount
       );
-  } else if (drop.amount < 0) {
-    changeAuraAmount(
-      peerId,
-      userId,
-      drop.amount
-    );
 
-    totalAura =
-      getTotalAura(userId);
+    resultText =
+      formatGameReward(rewardResult);
+  } else if (drop.amount < 0) {
+    const penaltyResult =
+      applyGamePenalty(
+        userId,
+        Math.abs(drop.amount)
+      );
+
+    resultText =
+      formatGamePenalty(penaltyResult);
+
+    dropText =
+      '💀 Не повезло!';
   }
 
   await context.send(
     '📦 Ты открыл кейс...\n\n' +
-    `${drop.text}\n\n` +
-    `🌟 Общая аура: ${totalAura}`
+    `${dropText}\n\n` +
+    resultText
   );
 
   return true;
@@ -1048,35 +1107,64 @@ async function playCasino(
   context,
   rawBet
 ) {
-  const bet =
-    Number(rawBet);
+  const userId =
+    Number(context.senderId);
+
+  const balance =
+    getBalance(userId);
+
+  const normalizedBet =
+    String(rawBet ?? '')
+      .trim()
+      .toLowerCase();
+
+  const isAllIn = [
+    'всё',
+    'все',
+    'all'
+  ].includes(normalizedBet);
+
+  const amountText = normalizedBet
+    .replace(/\$$/, '')
+    .trim();
+
+  const bet = isAllIn
+    ? balance
+    : /^\d[\d\s.,_]*$/.test(amountText)
+      ? Number(
+        amountText.replace(
+          /[\s.,_]/g,
+          ''
+        )
+      )
+      : NaN;
 
   if (
-    !Number.isInteger(bet) ||
+    !Number.isSafeInteger(bet) ||
     bet <= 0
   ) {
     await context.reply(
       '❌ Укажи целую положительную ставку.\n\n' +
-      'Пример:\n' +
-      '!казино 10'
+      'Примеры:\n' +
+      '!казино 10.000\n' +
+      '!казино всё'
     );
 
     return true;
   }
 
-  if (bet > 1000) {
+  if (balance < bet) {
     await context.reply(
-      '❌ Максимальная ставка — 1000 ауры.'
+      '❌ Недостаточно денег.\n\n' +
+      `💵 Баланс: ${formatMoney(balance)} $\n` +
+      `🎰 Ставка: ${formatMoney(bet)} $`
     );
 
     return true;
   }
-
-  const userId =
-    Number(context.senderId);
 
   const peerId =
-    getRewardPeerId(context);
+    getGameScopeId(context);
 
   const casinoKey =
     getPlayerKey(
@@ -1099,57 +1187,74 @@ async function playCasino(
     );
   }
 
-  const totalAura =
-    getTotalAura(userId);
+  const multiplierTenths =
+    crypto.randomInt(0, 31);
 
-  if (totalAura < bet) {
-    await context.reply(
-      '❌ Недостаточно ауры.\n\n' +
-      `Твоя аура: ${totalAura}\n` +
-      `Ставка: ${bet}`
-    );
+  const multiplier =
+    multiplierTenths / 10;
 
-    return true;
-  }
-
-  const won =
-    Math.random() < 0.5;
-
-  if (won) {
-    /*
-     * Чистая прибыль равна ставке.
-     */
-    addAuraAmount(
-      peerId,
-      userId,
-      bet
-    );
-
-    const newTotal =
-      getTotalAura(userId);
-
-    await context.send(
-      '🎰 Победа!\n\n' +
-      `Ты выиграл +${bet} ауры.\n` +
-      `🌟 Общая аура: ${newTotal}`
-    );
-
-    return true;
-  }
-
-  changeAuraAmount(
-    peerId,
-    userId,
-    -bet
+  const payout = Math.floor(
+    bet * multiplierTenths / 10
   );
 
-  const newTotal =
-    getTotalAura(userId);
+  const netResult =
+    payout - bet;
+
+  let resultTitle =
+    '➖ Ставка вернулась без изменений.';
+
+  let settlementText =
+    `🏦 Баланс: ${formatMoney(balance)} $`;
+
+  if (netResult > 0) {
+    const rewardResult = applyGameReward(
+      userId,
+      netResult
+    );
+
+    resultTitle =
+      `📈 Чистая прибыль: +${formatMoney(netResult)} $`;
+
+    const settlementLines = [];
+
+    if (rewardResult.debtPaid > 0) {
+      settlementLines.push(
+        `💳 Из выигрыша погашено долга: ${formatMoney(rewardResult.debtPaid)} $`
+      );
+    }
+
+    if (rewardResult.credited > 0) {
+      settlementLines.push(
+        `💵 Зачислено на баланс: ${formatMoney(rewardResult.credited)} $`
+      );
+    }
+
+    settlementLines.push(
+      `🏦 Баланс: ${formatMoney(rewardResult.balance)} $`
+    );
+
+    settlementText =
+      settlementLines.join('\n');
+  } else if (netResult < 0) {
+    const penaltyResult = applyGamePenalty(
+      userId,
+      Math.abs(netResult)
+    );
+
+    resultTitle =
+      `📉 Чистый проигрыш: -${formatMoney(Math.abs(netResult))} $`;
+
+    settlementText =
+      `🏦 Баланс: ${formatMoney(penaltyResult.balance)} $`;
+  }
 
   await context.send(
-    '🎰 Проигрыш!\n\n' +
-    `Ты потерял ${bet} ауры.\n` +
-    `🌟 Общая аура: ${newTotal}`
+    '🎰 Казино Zaffron\n\n' +
+    `🎲 Множитель: x${multiplier.toFixed(1)}\n` +
+    `💵 Ставка: ${formatMoney(bet)} $\n` +
+    `💰 Выплата: ${formatMoney(payout)} $\n` +
+    `${resultTitle}\n\n` +
+    settlementText
   );
 
   return true;
@@ -1340,17 +1445,16 @@ async function guessNumber(
 
   guessGames.delete(peerId);
 
-  const newAura =
-    addAuraAmount(
-      peerId,
+  const rewardResult =
+    applyGameReward(
       userId,
       4
     );
 
   await context.send(
     `🏆 @id${userId} угадал число ${game.number}!\n\n` +
-    '✨ Награда: +4 ауры\n' +
-    `🌟 Теперь у игрока: ${newAura}`
+    '💵 Награда: +4 $\n' +
+    formatGameReward(rewardResult)
   );
 
   return true;

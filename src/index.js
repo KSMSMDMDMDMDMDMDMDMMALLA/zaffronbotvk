@@ -9,12 +9,26 @@ const aura = require('./aura');
 const memduel = require('./memduel');
 const games2 = require('./games2');
 const other = require('./other');
+const admin = require('./admin');
+const promo = require('./promo');
+const jobs = require('./jobs');
+const magazine = require('./magazine');
+const business = require('./business');
+const bank = require('./bank');
+const transfer = require('./transfer');
 
 const {
+  formatMoney,
   initializeDatabase,
+  JOB_MAX_LEVEL,
+  getJobExperienceRequired,
   saveUser,
   getUserByVkId,
-  getTotalAura
+  getTotalAura,
+  getBalance,
+  getBalanceTop,
+  getGameDebt,
+  getJobProfile
 } = require('./database');
 
 const fs = require('fs');
@@ -65,19 +79,45 @@ function formatDate(dateString) {
 }
 
 async function sendPhoto(context, vk, fileName, message = '') {
-  const attachment = await vk.upload.messagePhoto({
-    peer_id: context.peerId,
-    source: {
-      value: fs.createReadStream(
-        path.join(__dirname, '..', 'photos', fileName)
-      )
-    }
-  });
+  const attachment = await uploadMessagePhotoSafe(
+    vk,
+    context.peerId,
+    path.join(
+      __dirname,
+      '..',
+      'photos',
+      fileName
+    )
+  );
 
   await context.send({
     message,
-    attachment
+    ...(attachment
+      ? { attachment }
+      : {})
   });
+}
+
+async function uploadMessagePhotoSafe(
+  vk,
+  peerId,
+  photoPath
+) {
+  try {
+    return await vk.upload.messagePhoto({
+      peer_id: peerId,
+      source: {
+        value: fs.createReadStream(photoPath)
+      }
+    });
+  } catch (error) {
+    console.error(
+      `Не удалось загрузить изображение ${path.basename(photoPath)}:`,
+      error
+    );
+
+    return null;
+  }
 }
 
 
@@ -356,6 +396,38 @@ vk.updates.on('message_new', async (context, next) => {
   const originalText = String(context.text ?? '').trim();
   const text = normalizeText(originalText);
 
+if (
+  await admin.handle(
+    context,
+    vk
+  )
+) {
+  return;
+}
+
+if (await promo.handle(context)) {
+  return;
+}
+
+if (await transfer.handle(context, vk)) {
+  return;
+}
+
+if (await magazine.handle(context)) {
+  return;
+}
+
+if (await business.handle(context)) {
+  return;
+}
+
+if (await bank.handle(context)) {
+  return;
+}
+
+if (await jobs.handle(context, vk)) {
+  return;
+}
 
 if (
   await other.handle(
@@ -412,21 +484,24 @@ if (context.isUser && startCommands.has(text)) {
     lastName: user.lastName
   });
 
-  const attachment = await vk.upload.messagePhoto({
-    peer_id: context.peerId,
-    source: {
-      value: fs.createReadStream(
-        path.join(__dirname, 'photos', 'start.jpg')
-)
-    }
-  });
+  const attachment = await uploadMessagePhotoSafe(
+    vk,
+    context.peerId,
+    path.join(
+      __dirname,
+      'photos',
+      'start.jpg'
+    )
+  );
 
   await context.send({
     message:
       '👋 Добро пожаловать в Бот Zaffron!\n\n' +
       '📋 Жми на кнопки ниже!\n',
 
-    attachment,
+    ...(attachment
+      ? { attachment }
+      : {}),
 
     keyboard: Keyboard.builder()
       .textButton({
@@ -643,17 +718,20 @@ const payload = context.messagePayload;
 
 if (payload?.command === 'commands') {
 
-  const attachment = await vk.upload.messagePhoto({
-    peer_id: context.peerId,
-    source: {
-      value: fs.createReadStream(
-        path.join(__dirname, 'photos', 'commands.jpg')
-      )
-    }
-  });
+  const attachment = await uploadMessagePhotoSafe(
+    vk,
+    context.peerId,
+    path.join(
+      __dirname,
+      'photos',
+      'commands.jpg'
+    )
+  );
 
   await context.send({
-    attachment,
+    ...(attachment
+      ? { attachment }
+      : {}),
 
     message:
 `╭─── 📋 Zaffron ───╮
@@ -661,8 +739,21 @@ if (payload?.command === 'commands') {
 💙 Основное
 │
 ├ 👤 !п — профиль
+├ 💵 !баланс — игровой баланс
+├ 💸 !передать [сумма] [username/реплай]
+├ 🏆 !топ баланс — топ по балансу
+├ 🎟  !promo [код] — активировать промокод
 ├ 📋 !команды — список команд
 └ ❓ FAQ -
+
+💵 Заработок
+│
+├ 🛒 !магазин — имущество и бусты
+├ 📦 !имущество — управление имуществом
+├ 🏢 !бизнес — управление бизнесами
+├ 🏦 !банк — вклад и проценты
+├ 💼 !работы — список работ
+├ 👷 !работать [работа]
 
 🎉 Развлечения
 │
@@ -676,7 +767,7 @@ if (payload?.command === 'commands') {
 ├ 🥔 !картошка
 ├ 💣 !бомба 
 ├ ⚡ !реакция
-├ 🎰 !казино [число]
+├ 🎰 !казино [ставка/всё]
 └ 🎯 !угадай
 
 📄 Прочее
@@ -695,9 +786,83 @@ if (payload?.command === 'commands') {
   /^!п$/i.test(originalText) ||
   originalText === '👤 Профиль';
 
-  const auraCount = getTotalAura(
-  Number(context.senderId)
-);
+if (/^(?:!баланс|\$)$/i.test(originalText)) {
+  const balance = getBalance(
+    Number(context.senderId)
+  );
+
+  await context.send(
+    `💵 Твой баланс: ${formatMoney(balance)} $`
+  );
+
+  return;
+}
+
+if (/^!топ\s+баланс(?:а)?$/i.test(originalText)) {
+  const top = getBalanceTop(10);
+
+  if (top.length === 0) {
+    await context.send(
+      '🏆 Топ баланса пока пуст.'
+    );
+
+    return;
+  }
+
+  let usersById = new Map();
+
+  try {
+    const users = await vk.api.users.get({
+      user_ids: top
+        .map(item => item.vkId)
+        .join(',')
+    });
+
+    usersById = new Map(
+      users.map(user => [
+        Number(user.id),
+        user
+      ])
+    );
+  } catch (error) {
+    console.error(
+      'Не удалось получить имена для топа баланса:',
+      error
+    );
+  }
+
+  const medals = [
+    '🥇',
+    '🥈',
+    '🥉'
+  ];
+
+  const lines = top.map(
+    (item, index) => {
+      const user =
+        usersById.get(item.vkId);
+
+      const name = user
+        ? `${user.first_name} ${user.last_name}`
+        : `id${item.vkId}`;
+
+      const position =
+        medals[index] ?? `${index + 1}.`;
+
+      return (
+        `${position} @id${item.vkId} (${name}) — ` +
+        `${formatMoney(item.balance)} $`
+      );
+    }
+  );
+
+  await context.send(
+    '🏆 Топ игроков по балансу\n\n' +
+    lines.join('\n')
+  );
+
+  return;
+}
 
 if (isProfileCommand) {
   let user = getUserByVkId(context.senderId);
@@ -722,26 +887,60 @@ if (isProfileCommand) {
       .join(' ') || 'Неизвестно';
 
     const auraCount = getTotalAura(
-  Number(context.senderId)
-);;
+      Number(context.senderId)
+    );
 
-    const attachment = await vk.upload.messagePhoto({
-      peer_id: context.peerId,
-      source: {
-        value: fs.createReadStream(
-          path.join(__dirname, 'photos', 'profile.jpg')
-        )
-      }
-    });
+    const balance = getBalance(
+      Number(context.senderId)
+    );
+
+    const gameDebt = getGameDebt(
+      Number(context.senderId)
+    );
+
+    const jobProfile = getJobProfile(
+      Number(context.senderId)
+    );
+
+    const jobExperienceRequired =
+      getJobExperienceRequired(jobProfile.level);
+
+    const jobExperienceText =
+      jobExperienceRequired === null
+        ? `📊 EXP в статистике: ${jobProfile.experience}`
+        : `📈 EXP: ${jobProfile.experience}/${jobExperienceRequired}`;
+
+    const propertyText =
+      magazine.getProfileText(
+        Number(context.senderId)
+      );
+
+    const attachment = await uploadMessagePhotoSafe(
+      vk,
+      context.peerId,
+      path.join(
+        __dirname,
+        'photos',
+        'profile.jpg'
+      )
+    );
 
     await context.send({
-      attachment,
+      ...(attachment
+        ? { attachment }
+        : {}),
 
       message:
         '👤 Профиль\n\n' +
         `🆔 ID: ${user.vk_id}\n` +
         `👤 Имя: ${fullName}\n` +
-        `✨ Аура: ${auraCount}\n\n` +
+        `✨ Аура: ${auraCount}\n` +
+        `💵 Баланс: ${formatMoney(balance)} $\n` +
+        `🥔 Долг в играх: ${formatMoney(gameDebt)} $\n\n` +
+        `⭐ Уровень: ${jobProfile.level}` +
+        `${jobProfile.level >= JOB_MAX_LEVEL ? ' (максимальный)' : ''}\n` +
+        `${jobExperienceText}\n\n` +
+        `${propertyText}\n\n` +
         `📅 Регистрация: ${formatDate(user.created_at)}`
     });
 
@@ -754,17 +953,20 @@ if (isProfileCommand) {
  */
 if (/^!команды$/i.test(originalText)) {
 
-  const attachment = await vk.upload.messagePhoto({
-    peer_id: context.peerId,
-    source: {
-      value: fs.createReadStream(
-        path.join(__dirname, 'photos', 'commands.jpg')
-      )
-    }
-  });
+  const attachment = await uploadMessagePhotoSafe(
+    vk,
+    context.peerId,
+    path.join(
+      __dirname,
+      'photos',
+      'commands.jpg'
+    )
+  );
 
   await context.send({
-    attachment,
+    ...(attachment
+      ? { attachment }
+      : {}),
 
     message:
 `╭─── 📋 Zaffron ───╮
@@ -772,8 +974,21 @@ if (/^!команды$/i.test(originalText)) {
 💙 Основное
 │
 ├ 👤 !п — профиль
+├ 💵 !баланс — игровой баланс
+├ 💸 !передать [сумма] [username/реплай]
+├ 🏆 !топ баланс — топ по балансу
+├ 🎟  !promo [код] — активировать промокод
 ├ 📋 !команды — список команд
 └ ❓ FAQ -
+
+💵 Заработок
+│
+├ 🛒 !магазин — имущество и бусты
+├ 📦 !имущество — управление имуществом
+├ 🏢 !бизнес — управление бизнесами
+├ 🏦 !банк — вклад и проценты
+├ 💼 !работы — список работ
+├ 👷 !работать [работа]
 
 🎉 Развлечения
 │
@@ -787,7 +1002,7 @@ if (/^!команды$/i.test(originalText)) {
 ├ 🥔 !картошка
 ├ 💣 !бомба 
 ├ ⚡ !реакция
-├ 🎰 !казино [число]
+├ 🎰 !казино [ставка/всё]
 └ 🎯 !угадай
 
 📄 Прочее
@@ -1128,6 +1343,8 @@ vk.updates.on('error', (error) => {
 
 async function startBot() {
   await initializeDatabase();
+
+  jobs.initialize(vk);
 
   await vk.updates.start();
 
