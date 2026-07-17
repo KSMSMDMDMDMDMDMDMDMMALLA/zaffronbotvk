@@ -309,10 +309,10 @@ function extractVkTarget(value) {
   return String(value ?? '')
     .trim()
     .replace(
-      /^https?:\/\/(www\.)?vk\.com\//i,
+      /^https?:\/\/(www\.)?vk\.(?:ru|com)\//i,
       ''
     )
-    .replace(/^vk\.com\//i, '')
+    .replace(/^vk\.(?:ru|com)\//i, '')
     .replace(/^@/, '')
     .replace(
       /^\[id(\d+)\|.*\]$/i,

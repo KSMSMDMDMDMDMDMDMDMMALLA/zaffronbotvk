@@ -17,6 +17,13 @@ const business = require('./business');
 const bank = require('./bank');
 const quests = require('./quests');
 const transfer = require('./transfer');
+const race = require('./race');
+const travel = require('./travel');
+const fishing = require('./fishing');
+const earnings = require('./earnings');
+const {
+  getCommandSuggestion
+} = require('./command-suggestions');
 
 const {
   formatMoney,
@@ -64,6 +71,208 @@ function normalizeText(text) {
     .trim()
     .toLowerCase()
     .replace(/[!.,?]+$/g, '');
+}
+
+const COMMAND_SECTIONS = Object.freeze({
+  main: {
+    title: '💙 Основное',
+    lines: [
+      '👤 !п — профиль',
+      '💵 !баланс',
+      '💸 !передать — перевод',
+      '🏆 !топ баланс',
+      '🎟 !promo — промокод',
+      '📋 !команды — разделы'
+    ]
+  },
+  earning: {
+    title: '💵 Заработок',
+    lines: [
+      '🛒 !магазин',
+      '📦 !имущество',
+      '🏢 !бизнес',
+      '🏦 !банк',
+      '✈ !перелёт — страны',
+      '🚚 !переезд [страна]',
+      '🎁 !коробка — уровни 1–3',
+      '🎣 !рыбачить',
+      '🎒 !улов',
+      '📜 !квесты',
+      '💼 !работы',
+      '👷 !работать [работа]'
+    ]
+  },
+  fun: {
+    title: '🎉 Развлечения',
+    lines: [
+      '🔮 !zaff стоит ли [вопрос]',
+      '🔊 !скажи — озвучка',
+      '🤔 !кто — выбор игрока',
+      '😂 !мем',
+      '✨ +аура — выдать',
+      '✨ !топ ауры',
+      '🌌 !мемдуэль — вызов',
+      '🥔 !картошка',
+      '💣 !бомба',
+      '⚡ !реакция',
+      '🎰 !казино [ставка]',
+      '🏁 !гонка — вызов',
+      '🎯 !угадай'
+    ]
+  },
+  other: {
+    title: '📄 Прочее',
+    lines: [
+      '🔍 !анализ — профиль VK',
+      '📚 !вики [запрос]',
+      '🌠 Фото — отправь в ЛС',
+      '💚 !qr [текст/ссылка]'
+    ]
+  }
+});
+
+const COMMAND_SECTION_ALIASES =
+  Object.freeze({
+    основное: 'main',
+    заработок: 'earning',
+    развлечения: 'fun',
+    прочее: 'other'
+  });
+
+function createCommandSectionsKeyboard() {
+  return Keyboard.builder()
+    .textButton({
+      label: '💙 Основное',
+      payload: {
+        command: 'commands_section',
+        section: 'main'
+      },
+      color: Keyboard.PRIMARY_COLOR
+    })
+    .textButton({
+      label: '💵 Заработок',
+      payload: {
+        command: 'commands_section',
+        section: 'earning'
+      },
+      color: Keyboard.POSITIVE_COLOR
+    })
+    .row()
+    .textButton({
+      label: '🎉 Развлечения',
+      payload: {
+        command: 'commands_section',
+        section: 'fun'
+      },
+      color: Keyboard.PRIMARY_COLOR
+    })
+    .textButton({
+      label: '📄 Прочее',
+      payload: {
+        command: 'commands_section',
+        section: 'other'
+      },
+      color: Keyboard.SECONDARY_COLOR
+    })
+    .inline();
+}
+
+function createCommandsReturnKeyboard() {
+  return Keyboard.builder()
+    .textButton({
+      label: '⬅ Все разделы',
+      payload: {
+        command: 'commands_home'
+      },
+      color: Keyboard.SECONDARY_COLOR
+    })
+    .inline();
+}
+
+async function sendCommandsHome(context, vk) {
+  const attachment = await uploadMessagePhotoSafe(
+    vk,
+    context.peerId,
+    path.join(
+      __dirname,
+      'photos',
+      'commands.jpg'
+    )
+  );
+
+  await context.send({
+    ...(attachment
+      ? { attachment }
+      : {}),
+    message:
+      '📋 Команды Zaffron\n\n' +
+      'Выбери нужный раздел кнопкой ниже.',
+    keyboard: createCommandSectionsKeyboard()
+  });
+
+  return true;
+}
+
+async function sendCommandsSection(
+  context,
+  sectionKey
+) {
+  const section = COMMAND_SECTIONS[sectionKey];
+
+  if (!section) {
+    return false;
+  }
+
+  await context.send({
+    message:
+      `${section.title}\n\n` +
+      section.lines.join('\n'),
+    keyboard: createCommandsReturnKeyboard()
+  });
+
+  return true;
+}
+
+async function handleCommandsMenu(
+  context,
+  vk,
+  originalText,
+  payload
+) {
+  if (
+    payload?.command === 'commands' ||
+    payload?.command === 'commands_home'
+  ) {
+    return sendCommandsHome(context, vk);
+  }
+
+  if (payload?.command === 'commands_section') {
+    return sendCommandsSection(
+      context,
+      String(payload.section)
+    );
+  }
+
+  const match = String(originalText ?? '')
+    .trim()
+    .match(/^!команды(?:\s+(.+))?$/i);
+
+  if (!match) {
+    return false;
+  }
+
+  if (!match[1]) {
+    return sendCommandsHome(context, vk);
+  }
+
+  const sectionKey =
+    COMMAND_SECTION_ALIASES[
+      normalizeText(match[1])
+    ];
+
+  return sectionKey
+    ? sendCommandsSection(context, sectionKey)
+    : sendCommandsHome(context, vk);
 }
 
 function formatDate(dateString) {
@@ -126,8 +335,8 @@ async function uploadMessagePhotoSafe(
 function extractVkUser(value) {
   return String(value ?? '')
     .trim()
-    .replace(/^https?:\/\/(www\.)?vk\.com\//i, '')
-    .replace(/^vk\.com\//i, '')
+    .replace(/^https?:\/\/(www\.)?vk\.(?:ru|com)\//i, '')
+    .replace(/^vk\.(?:ru|com)\//i, '')
     .replace(/^@/, '')
     .split(/[?#/]/)[0]
     .trim();
@@ -412,6 +621,22 @@ if (await promo.handle(context)) {
 }
 
 if (await transfer.handle(context, vk)) {
+  return;
+}
+
+if (await race.handle(context, vk)) {
+  return;
+}
+
+if (await travel.handle(context)) {
+  return;
+}
+
+if (await earnings.handle(context)) {
+  return;
+}
+
+if (await fishing.handle(context)) {
   return;
 }
 
@@ -722,73 +947,17 @@ ${answer}`,
    */
 const payload = context.messagePayload;
 
-if (payload?.command === 'commands') {
-
-  const attachment = await uploadMessagePhotoSafe(
+if (
+  await handleCommandsMenu(
+    context,
     vk,
-    context.peerId,
-    path.join(
-      __dirname,
-      'photos',
-      'commands.jpg'
-    )
-  );
-
-  await context.send({
-    ...(attachment
-      ? { attachment }
-      : {}),
-
-    message:
-`╭─── 📋 Zaffron ───╮
-
-💙 Основное
-│
-├ 👤 !п — профиль
-├ 💵 !баланс — игровой баланс
-├ 💸 !передать [сумма] [username/реплай]
-├ 🏆 !топ баланс — топ по балансу
-├ 🎟  !promo [код] — активировать промокод
-├ 📋 !команды — список команд
-└ ❓ FAQ - https://vk.ru/@zaffron-komandy-bot-zaffron
-
-💵 Заработок
-│
-├ 🛒 !магазин — имущество и бусты
-├ 📦 !имущество — управление имуществом
-├ 🏢 !бизнес — управление бизнесами
-├ 🏦 !банк — вклад и проценты
-├ 📜 !квесты — задания и награды
-├ 💼 !работы — список работ
-├ 👷 !работать [работа]
-
-🎉 Развлечения
-│
-├ 🔮 !zaff стоит ли [вопрос]
-├ 🔊 !скажи [текст]
-├ 🤔 !кто [текст]
-├ 😂 !мем
-├ ✨ +аура [реплай]
-├ ✨ !топ ауры
-├ 🌌 !мемдуэль [username / реплай]
-├ 🥔 !картошка
-├ 💣 !бомба 
-├ ⚡ !реакция
-├ 🎰 !казино [ставка/всё]
-└ 🎯 !угадай
-
-📄 Прочее
-│
-├ 🔍 !анализ [ссылка | @username]
-├ 📚 !вики [запрос]
-├ 🌠 Обработка фотографии [в лс бота]
-└ 💚 !qr [текст/ссылка]
-
-╰──────────────╯`
-  });
-
+    originalText,
+    payload
+  )
+) {
   return;
 }
+
   const isProfileCommand =
   /^!п$/i.test(originalText) ||
   originalText === '👤 Профиль';
@@ -927,6 +1096,11 @@ if (isProfileCommand) {
         Number(context.senderId)
       );
 
+    const travelText =
+      travel.getProfileText(
+        Number(context.senderId)
+      );
+
     const attachment = await uploadMessagePhotoSafe(
       vk,
       context.peerId,
@@ -952,81 +1126,10 @@ if (isProfileCommand) {
         `⭐ Уровень: ${jobProfile.level}` +
         `${jobProfile.level >= JOB_MAX_LEVEL ? ' (максимальный)' : ''}\n` +
         `${jobExperienceText}\n\n` +
+        `${travelText}\n\n` +
         `${propertyText}\n\n` +
         `📅 Регистрация: ${formatDate(user.created_at)}`
     });
-
-  return;
-}
-
-  /*
-  /*
- * Список команд.
- */
-if (/^!команды$/i.test(originalText)) {
-
-  const attachment = await uploadMessagePhotoSafe(
-    vk,
-    context.peerId,
-    path.join(
-      __dirname,
-      'photos',
-      'commands.jpg'
-    )
-  );
-
-  await context.send({
-    ...(attachment
-      ? { attachment }
-      : {}),
-
-    message:
-`╭─── 📋 Zaffron ───╮
-
-💙 Основное
-│
-├ 👤 !п — профиль
-├ 💵 !баланс — игровой баланс
-├ 💸 !передать [сумма] [username/реплай]
-├ 🏆 !топ баланс — топ по балансу
-├ 🎟  !promo [код] — активировать промокод
-├ 📋 !команды — список команд
-└ ❓ FAQ - https://vk.ru/@zaffron-komandy-bot-zaffron
-
-💵 Заработок
-│
-├ 🛒 !магазин — имущество и бусты
-├ 📦 !имущество — управление имуществом
-├ 🏢 !бизнес — управление бизнесами
-├ 🏦 !банк — вклад и проценты
-├ 📜 !квесты — задания и награды
-├ 💼 !работы — список работ
-├ 👷 !работать [работа]
-
-🎉 Развлечения
-│
-├ 🔮 !zaff стоит ли [вопрос]
-├ 🔊 !скажи [текст]
-├ 🤔 !кто [текст]
-├ 😂 !мем
-├ ✨ +аура [реплай]
-├ ✨ !топ ауры
-├ 🌌 !мемдуэль [username / реплай]
-├ 🥔 !картошка
-├ 💣 !бомба 
-├ ⚡ !реакция
-├ 🎰 !казино [ставка/всё]
-└ 🎯 !угадай
-
-📄 Прочее
-│
-├ 🔍 !анализ [ссылка | @username]
-├ 📚 !вики [запрос]
-├ 🌠 Обработка фотографии [в лс бота]
-└ 💚 !qr [текст/ссылка]
-
-╰──────────────╯`
-  });
 
   return;
 }
@@ -1100,7 +1203,7 @@ ${result.url}`
     await context.send(
       '❌ Укажи страницу пользователя.\n\n' +
       'Пример:\n' +
-      '!анализ https://vk.com/durov'
+      '!анализ https://vk.ru/durov'
     );
 
     return;
@@ -1252,7 +1355,7 @@ ${result.url}`
         '🔎 Анализ страницы\n\n' +
         `👤 Имя: ${fullName}\n` +
         `🆔 VK ID: ${user.id}\n` +
-        `🔗 Страница: vk.com/${screenName}\n` +
+        `🔗 Страница: vk.ru/${screenName}\n` +
         `📄 Тип страницы: ${pageAccess}\n` +
         `✔ Верифицирована: ${verifiedText}\n\n` +
 
@@ -1340,6 +1443,37 @@ ${result.url}`
       ];
 
     await context.send(randomAnswer);
+
+    return;
+  }
+
+  /*
+   * Неизвестная команда — только в личных
+   * сообщениях и только для текстовых сообщений.
+   */
+  if (context.isUser && originalText) {
+    const suggestedCommand =
+      getCommandSuggestion(originalText);
+    const commandHint = suggestedCommand
+      ? `\n\n💡 Правильная команда:\n${suggestedCommand}`
+      : '';
+
+    await context.send({
+      message:
+        '❌ Такой команды не существует!' +
+        commandHint +
+        '\n\n📋 Нажми на кнопку ниже, чтобы посмотреть список команд.',
+
+      keyboard: Keyboard.builder()
+        .textButton({
+          label: '📋 Команды',
+          payload: {
+            command: 'commands'
+          },
+          color: Keyboard.PRIMARY_COLOR
+        })
+        .inline()
+    });
 
     return;
   }

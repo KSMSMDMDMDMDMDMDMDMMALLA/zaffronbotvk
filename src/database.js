@@ -19,6 +19,9 @@ const GAME_DEBT_LIMIT = 25;
 const JOB_MAX_LEVEL = 50;
 const BUSINESS_MAX_UPGRADE_LEVEL = 5;
 const BANK_MAX_INTEREST_HOURS = 72;
+const BEGINNER_BOX_MAX_LEVEL = 3;
+const BEGINNER_BOX_COOLDOWN_MS =
+  10 * 60 * 1000;
 
 const BANK_INTEREST_BRACKETS =
   Object.freeze([
@@ -358,6 +361,55 @@ async function initializeDatabase() {
         vk_id,
         quest_key
       )
+    );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS travel_profiles (
+      vk_id INTEGER PRIMARY KEY,
+      current_country_key TEXT NOT NULL DEFAULT 'russia',
+      moved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS country_research (
+      vk_id INTEGER NOT NULL,
+      country_key TEXT NOT NULL,
+      researched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+      PRIMARY KEY (
+        vk_id,
+        country_key
+      )
+    );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS fishing_catches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      vk_id INTEGER NOT NULL,
+      loot_key TEXT NOT NULL,
+      loot_title TEXT NOT NULL,
+      weight_grams INTEGER NOT NULL,
+      value INTEGER NOT NULL,
+      caught_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+      CHECK (weight_grams > 0),
+      CHECK (value > 0)
+    );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS beginner_boxes (
+      vk_id INTEGER PRIMARY KEY,
+      last_opened_at INTEGER NOT NULL,
+      opened_count INTEGER NOT NULL DEFAULT 0,
+      total_earned INTEGER NOT NULL DEFAULT 0,
+
+      CHECK (last_opened_at >= 0),
+      CHECK (opened_count >= 0),
+      CHECK (total_earned >= 0)
     );
   `);
 
@@ -1583,6 +1635,865 @@ function getMagazineAssets(vkId) {
   statement.free();
 
   return assets;
+}
+
+function validateTravelCountryKey(countryKey) {
+  const safeCountryKey =
+    String(countryKey ?? '').trim();
+
+  if (!/^[a-z0-9_-]{1,64}$/i.test(safeCountryKey)) {
+    throw new Error(
+      'Некорректный ключ страны'
+    );
+  }
+
+  return safeCountryKey;
+}
+
+function ensureTravelProfile(vkId) {
+  ensureDatabase();
+
+  const safeVkId = Number(vkId);
+
+  if (
+    !Number.isInteger(safeVkId) ||
+    safeVkId <= 0
+  ) {
+    throw new Error(
+      'VK ID должен быть положительным целым числом'
+    );
+  }
+
+  let changed = false;
+
+  db.run(
+    `
+      INSERT OR IGNORE INTO travel_profiles (
+        vk_id,
+        current_country_key
+      )
+      VALUES (?, 'russia')
+    `,
+    [safeVkId]
+  );
+  changed = db.getRowsModified() > 0;
+
+  db.run(
+    `
+      INSERT OR IGNORE INTO country_research (
+        vk_id,
+        country_key
+      )
+      VALUES (?, 'russia')
+    `,
+    [safeVkId]
+  );
+  changed =
+    db.getRowsModified() > 0 ||
+    changed;
+
+  if (changed) {
+    persistDatabase();
+  }
+
+  return safeVkId;
+}
+
+function getTravelProfile(vkId) {
+  const safeVkId = ensureTravelProfile(vkId);
+  const profileStatement = db.prepare(`
+    SELECT current_country_key
+    FROM travel_profiles
+    WHERE vk_id = ?
+  `);
+
+  profileStatement.bind([safeVkId]);
+
+  let currentCountryKey = 'russia';
+
+  if (profileStatement.step()) {
+    currentCountryKey = String(
+      profileStatement
+        .getAsObject()
+        .current_country_key
+    );
+  }
+
+  profileStatement.free();
+
+  const researchStatement = db.prepare(`
+    SELECT country_key
+    FROM country_research
+    WHERE vk_id = ?
+    ORDER BY researched_at ASC
+  `);
+
+  researchStatement.bind([safeVkId]);
+
+  const researchedCountryKeys = [];
+
+  while (researchStatement.step()) {
+    researchedCountryKeys.push(
+      String(
+        researchStatement
+          .getAsObject()
+          .country_key
+      )
+    );
+  }
+
+  researchStatement.free();
+
+  return {
+    currentCountryKey,
+    researchedCountryKeys
+  };
+}
+
+function hasPlaneAsset(vkId) {
+  const statement = db.prepare(`
+    SELECT 1
+    FROM magazine_assets
+    WHERE vk_id = ?
+      AND item_type = 'planes'
+    LIMIT 1
+  `);
+
+  statement.bind([vkId]);
+  const hasPlane = statement.step();
+  statement.free();
+
+  return hasPlane;
+}
+
+function researchCountry({
+  vkId,
+  countryKey,
+  cost
+}) {
+  const safeVkId = ensureTravelProfile(vkId);
+  const safeCountryKey =
+    validateTravelCountryKey(countryKey);
+  const safeCost = Number(cost);
+
+  if (
+    !Number.isSafeInteger(safeCost) ||
+    safeCost <= 0
+  ) {
+    throw new Error(
+      'Стоимость исследования должна быть положительным целым числом'
+    );
+  }
+
+  const profile = getTravelProfile(safeVkId);
+
+  if (
+    profile.researchedCountryKeys.includes(
+      safeCountryKey
+    )
+  ) {
+    return {
+      status: 'already_researched',
+      balance: getBalance(safeVkId)
+    };
+  }
+
+  if (!hasPlaneAsset(safeVkId)) {
+    return {
+      status: 'no_plane',
+      balance: getBalance(safeVkId)
+    };
+  }
+
+  const balance = getBalance(safeVkId);
+
+  if (balance < safeCost) {
+    return {
+      status: 'insufficient_funds',
+      cost: safeCost,
+      balance,
+      missing: safeCost - balance
+    };
+  }
+
+  try {
+    db.run('BEGIN TRANSACTION;');
+
+    db.run(
+      `
+        UPDATE balances
+        SET dollars = dollars - ?
+        WHERE vk_id = ?
+          AND dollars >= ?
+      `,
+      [
+        safeCost,
+        safeVkId,
+        safeCost
+      ]
+    );
+
+    db.run(
+      `
+        INSERT INTO country_research (
+          vk_id,
+          country_key
+        )
+        VALUES (?, ?)
+      `,
+      [
+        safeVkId,
+        safeCountryKey
+      ]
+    );
+
+    db.run('COMMIT;');
+    persistDatabase();
+
+    return {
+      status: 'researched',
+      cost: safeCost,
+      balance: balance - safeCost,
+      countryKey: safeCountryKey
+    };
+  } catch (error) {
+    try {
+      db.run('ROLLBACK;');
+    } catch {
+      // Транзакция могла не успеть начаться.
+    }
+
+    throw error;
+  }
+}
+
+function moveCountry({
+  vkId,
+  countryKey,
+  cost
+}) {
+  const safeVkId = ensureTravelProfile(vkId);
+  const safeCountryKey =
+    validateTravelCountryKey(countryKey);
+  const safeCost = Number(cost);
+
+  if (
+    !Number.isSafeInteger(safeCost) ||
+    safeCost <= 0
+  ) {
+    throw new Error(
+      'Стоимость переезда должна быть положительным целым числом'
+    );
+  }
+
+  const profile = getTravelProfile(safeVkId);
+
+  if (profile.currentCountryKey === safeCountryKey) {
+    return {
+      status: 'already_there',
+      balance: getBalance(safeVkId)
+    };
+  }
+
+  if (
+    !profile.researchedCountryKeys.includes(
+      safeCountryKey
+    )
+  ) {
+    return {
+      status: 'not_researched',
+      balance: getBalance(safeVkId)
+    };
+  }
+
+  if (!hasPlaneAsset(safeVkId)) {
+    return {
+      status: 'no_plane',
+      balance: getBalance(safeVkId)
+    };
+  }
+
+  const balance = getBalance(safeVkId);
+
+  if (balance < safeCost) {
+    return {
+      status: 'insufficient_funds',
+      cost: safeCost,
+      balance,
+      missing: safeCost - balance
+    };
+  }
+
+  try {
+    db.run('BEGIN TRANSACTION;');
+
+    db.run(
+      `
+        UPDATE balances
+        SET dollars = dollars - ?
+        WHERE vk_id = ?
+          AND dollars >= ?
+      `,
+      [
+        safeCost,
+        safeVkId,
+        safeCost
+      ]
+    );
+
+    db.run(
+      `
+        UPDATE travel_profiles
+        SET
+          current_country_key = ?,
+          moved_at = CURRENT_TIMESTAMP
+        WHERE vk_id = ?
+      `,
+      [
+        safeCountryKey,
+        safeVkId
+      ]
+    );
+
+    db.run('COMMIT;');
+    persistDatabase();
+
+    return {
+      status: 'moved',
+      cost: safeCost,
+      balance: balance - safeCost,
+      countryKey: safeCountryKey
+    };
+  } catch (error) {
+    try {
+      db.run('ROLLBACK;');
+    } catch {
+      // Транзакция могла не успеть начаться.
+    }
+
+    throw error;
+  }
+}
+
+function addFishingCatch({
+  vkId,
+  lootKey,
+  lootTitle,
+  weightGrams,
+  value
+}) {
+  ensureDatabase();
+
+  const safeVkId = Number(vkId);
+  const safeLootKey =
+    String(lootKey ?? '').trim();
+  const safeLootTitle =
+    String(lootTitle ?? '').trim();
+  const safeWeightGrams = Number(weightGrams);
+  const safeValue = Number(value);
+
+  if (
+    !Number.isInteger(safeVkId) ||
+    safeVkId <= 0
+  ) {
+    throw new Error(
+      'VK ID должен быть положительным целым числом'
+    );
+  }
+
+  if (!/^[a-z0-9_-]{1,64}$/i.test(safeLootKey)) {
+    throw new Error(
+      'Некорректный ключ улова'
+    );
+  }
+
+  if (
+    !safeLootTitle ||
+    safeLootTitle.length > 100
+  ) {
+    throw new Error(
+      'Некорректное название улова'
+    );
+  }
+
+  if (
+    !Number.isSafeInteger(safeWeightGrams) ||
+    safeWeightGrams <= 0 ||
+    !Number.isSafeInteger(safeValue) ||
+    safeValue <= 0
+  ) {
+    throw new Error(
+      'Вес и стоимость улова должны быть положительными целыми числами'
+    );
+  }
+
+  db.run(
+    `
+      INSERT INTO fishing_catches (
+        vk_id,
+        loot_key,
+        loot_title,
+        weight_grams,
+        value
+      )
+      VALUES (?, ?, ?, ?, ?)
+    `,
+    [
+      safeVkId,
+      safeLootKey,
+      safeLootTitle,
+      safeWeightGrams,
+      safeValue
+    ]
+  );
+
+  persistDatabase();
+
+  return getFishingInventory(safeVkId);
+}
+
+function getFishingInventory(vkId) {
+  ensureDatabase();
+
+  const safeVkId = Number(vkId);
+
+  if (
+    !Number.isInteger(safeVkId) ||
+    safeVkId <= 0
+  ) {
+    throw new Error(
+      'VK ID должен быть положительным целым числом'
+    );
+  }
+
+  const statement = db.prepare(`
+    SELECT
+      loot_key,
+      loot_title,
+      COUNT(*) AS catch_count,
+      SUM(weight_grams) AS total_weight,
+      SUM(value) AS total_value
+    FROM fishing_catches
+    WHERE vk_id = ?
+    GROUP BY
+      loot_key,
+      loot_title
+    ORDER BY total_value DESC, loot_title ASC
+  `);
+
+  statement.bind([safeVkId]);
+
+  const items = [];
+  let catchCount = 0;
+  let totalWeightGrams = 0;
+  let totalValue = 0;
+
+  while (statement.step()) {
+    const row = statement.getAsObject();
+    const item = {
+      lootKey: String(row.loot_key),
+      title: String(row.loot_title),
+      count: Number(row.catch_count) || 0,
+      totalWeightGrams:
+        Number(row.total_weight) || 0,
+      totalValue:
+        Number(row.total_value) || 0
+    };
+
+    items.push(item);
+    catchCount += item.count;
+    totalWeightGrams += item.totalWeightGrams;
+    totalValue += item.totalValue;
+  }
+
+  statement.free();
+
+  return {
+    items,
+    catchCount,
+    totalWeightGrams,
+    totalValue
+  };
+}
+
+function sellAllFishingCatches(vkId) {
+  ensureDatabase();
+
+  const safeVkId = Number(vkId);
+
+  if (
+    !Number.isInteger(safeVkId) ||
+    safeVkId <= 0
+  ) {
+    throw new Error(
+      'VK ID должен быть положительным целым числом'
+    );
+  }
+
+  const inventory = getFishingInventory(safeVkId);
+
+  if (
+    inventory.catchCount <= 0 ||
+    inventory.totalValue <= 0
+  ) {
+    return {
+      status: 'empty',
+      balance: getBalance(safeVkId)
+    };
+  }
+
+  const balance = getBalance(safeVkId);
+
+  if (
+    balance >
+      Number.MAX_SAFE_INTEGER -
+      inventory.totalValue
+  ) {
+    return {
+      status: 'balance_limit'
+    };
+  }
+
+  try {
+    db.run('BEGIN TRANSACTION;');
+
+    db.run(
+      `
+        DELETE FROM fishing_catches
+        WHERE vk_id = ?
+      `,
+      [safeVkId]
+    );
+
+    db.run(
+      `
+        INSERT INTO balances (
+          vk_id,
+          dollars
+        )
+        VALUES (?, ?)
+
+        ON CONFLICT(vk_id)
+        DO UPDATE SET
+          dollars = dollars + excluded.dollars
+      `,
+      [
+        safeVkId,
+        inventory.totalValue
+      ]
+    );
+
+    db.run('COMMIT;');
+    persistDatabase();
+
+    return {
+      status: 'sold',
+      catchCount: inventory.catchCount,
+      totalWeightGrams:
+        inventory.totalWeightGrams,
+      earned: inventory.totalValue,
+      balance: balance + inventory.totalValue
+    };
+  } catch (error) {
+    try {
+      db.run('ROLLBACK;');
+    } catch {
+      // Транзакция могла не успеть начаться.
+    }
+
+    throw error;
+  }
+}
+
+function getBeginnerBoxRecord(vkId) {
+  ensureDatabase();
+
+  const safeVkId = Number(vkId);
+
+  if (
+    !Number.isInteger(safeVkId) ||
+    safeVkId <= 0
+  ) {
+    throw new Error(
+      'VK ID должен быть положительным целым числом'
+    );
+  }
+
+  const statement = db.prepare(`
+    SELECT
+      last_opened_at,
+      opened_count,
+      total_earned
+    FROM beginner_boxes
+    WHERE vk_id = ?
+  `);
+
+  statement.bind([safeVkId]);
+
+  let record = {
+    lastOpenedAt: 0,
+    openedCount: 0,
+    totalEarned: 0
+  };
+
+  if (statement.step()) {
+    const row = statement.getAsObject();
+
+    record = {
+      lastOpenedAt:
+        Number(row.last_opened_at) || 0,
+      openedCount:
+        Number(row.opened_count) || 0,
+      totalEarned:
+        Number(row.total_earned) || 0
+    };
+  }
+
+  statement.free();
+
+  return record;
+}
+
+function getBeginnerBoxStatus(
+  vkId,
+  currentTime = Date.now()
+) {
+  const safeVkId = Number(vkId);
+  const safeCurrentTime = Number(currentTime);
+
+  if (
+    !Number.isInteger(safeVkId) ||
+    safeVkId <= 0
+  ) {
+    throw new Error(
+      'VK ID должен быть положительным целым числом'
+    );
+  }
+
+  if (
+    !Number.isSafeInteger(safeCurrentTime) ||
+    safeCurrentTime < 0
+  ) {
+    throw new Error(
+      'Некорректное время открытия коробки'
+    );
+  }
+
+  const profile = getJobProfile(safeVkId);
+  const record = getBeginnerBoxRecord(safeVkId);
+
+  if (profile.level > BEGINNER_BOX_MAX_LEVEL) {
+    return {
+      status: 'level_limit',
+      available: false,
+      level: profile.level,
+      maxLevel: BEGINNER_BOX_MAX_LEVEL,
+      remainingMs: 0,
+      nextAvailableAt: 0,
+      ...record
+    };
+  }
+
+  const elapsed = record.openedCount > 0
+    ? Math.max(
+      0,
+      safeCurrentTime - record.lastOpenedAt
+    )
+    : BEGINNER_BOX_COOLDOWN_MS;
+  const remainingMs = Math.max(
+    0,
+    BEGINNER_BOX_COOLDOWN_MS - elapsed
+  );
+
+  return {
+    status:
+      remainingMs > 0
+        ? 'cooldown'
+        : 'available',
+    available: remainingMs === 0,
+    level: profile.level,
+    maxLevel: BEGINNER_BOX_MAX_LEVEL,
+    remainingMs,
+    nextAvailableAt:
+      remainingMs > 0
+        ? safeCurrentTime + remainingMs
+        : safeCurrentTime,
+    ...record
+  };
+}
+
+function claimBeginnerBox({
+  vkId,
+  reward,
+  currentTime = Date.now()
+}) {
+  ensureDatabase();
+
+  const safeVkId = Number(vkId);
+  const safeReward = Number(reward);
+  const safeCurrentTime = Number(currentTime);
+
+  if (
+    !Number.isInteger(safeVkId) ||
+    safeVkId <= 0
+  ) {
+    throw new Error(
+      'VK ID должен быть положительным целым числом'
+    );
+  }
+
+  if (
+    !Number.isSafeInteger(safeReward) ||
+    safeReward <= 0
+  ) {
+    throw new Error(
+      'Награда должна быть положительным целым числом'
+    );
+  }
+
+  const boxStatus = getBeginnerBoxStatus(
+    safeVkId,
+    safeCurrentTime
+  );
+
+  if (!boxStatus.available) {
+    return {
+      ...boxStatus,
+      balance: getBalance(safeVkId),
+      debt: getGameDebt(safeVkId)
+    };
+  }
+
+  if (
+    boxStatus.openedCount >=
+      Number.MAX_SAFE_INTEGER ||
+    boxStatus.totalEarned >
+      Number.MAX_SAFE_INTEGER - safeReward
+  ) {
+    return {
+      status: 'stat_limit'
+    };
+  }
+
+  const currentBalance = getBalance(safeVkId);
+  const currentDebt = getGameDebt(safeVkId);
+  const debtPaid = Math.min(
+    currentDebt,
+    safeReward
+  );
+  const credited = safeReward - debtPaid;
+
+  if (
+    currentBalance >
+      Number.MAX_SAFE_INTEGER - credited
+  ) {
+    return {
+      status: 'balance_limit'
+    };
+  }
+
+  try {
+    db.run('BEGIN TRANSACTION;');
+
+    db.run(
+      `
+        INSERT INTO beginner_boxes (
+          vk_id,
+          last_opened_at,
+          opened_count,
+          total_earned
+        )
+        VALUES (?, ?, 1, ?)
+
+        ON CONFLICT(vk_id)
+        DO UPDATE SET
+          last_opened_at = excluded.last_opened_at,
+          opened_count = opened_count + 1,
+          total_earned =
+            total_earned + excluded.total_earned
+      `,
+      [
+        safeVkId,
+        safeCurrentTime,
+        safeReward
+      ]
+    );
+
+    if (debtPaid > 0) {
+      const remainingDebt =
+        currentDebt - debtPaid;
+
+      if (remainingDebt > 0) {
+        db.run(
+          `
+            UPDATE game_debts
+            SET dollars = ?
+            WHERE vk_id = ?
+          `,
+          [
+            remainingDebt,
+            safeVkId
+          ]
+        );
+      } else {
+        db.run(
+          `
+            DELETE FROM game_debts
+            WHERE vk_id = ?
+          `,
+          [safeVkId]
+        );
+      }
+    }
+
+    if (credited > 0) {
+      db.run(
+        `
+          INSERT INTO balances (
+            vk_id,
+            dollars
+          )
+          VALUES (?, ?)
+
+          ON CONFLICT(vk_id)
+          DO UPDATE SET
+            dollars = dollars + excluded.dollars
+        `,
+        [
+          safeVkId,
+          credited
+        ]
+      );
+    }
+
+    db.run('COMMIT;');
+    persistDatabase();
+
+    const record = getBeginnerBoxRecord(
+      safeVkId
+    );
+
+    return {
+      status: 'opened',
+      reward: safeReward,
+      debtPaid,
+      credited,
+      balance: currentBalance + credited,
+      debt: currentDebt - debtPaid,
+      nextAvailableAt:
+        safeCurrentTime +
+        BEGINNER_BOX_COOLDOWN_MS,
+      ...record
+    };
+  } catch (error) {
+    try {
+      db.run('ROLLBACK;');
+    } catch {
+      // Транзакция могла не успеть начаться.
+    }
+
+    throw error;
+  }
 }
 
 function getJobBoostCount(vkId) {
@@ -4609,6 +5520,8 @@ function redeemPromo(vkId, code) {
 module.exports = {
   formatMoney,
   JOB_MAX_LEVEL,
+  BEGINNER_BOX_MAX_LEVEL,
+  BEGINNER_BOX_COOLDOWN_MS,
   getJobExperienceRequired,
   initializeDatabase,
   saveUser,
@@ -4641,6 +5554,14 @@ module.exports = {
   getJobProfile,
   calculateJobExperienceProgress,
   getMagazineAssets,
+  getTravelProfile,
+  researchCountry,
+  moveCountry,
+  addFishingCatch,
+  getFishingInventory,
+  sellAllFishingCatches,
+  getBeginnerBoxStatus,
+  claimBeginnerBox,
   getJobBoostCount,
   purchaseMagazineItem,
   sellMagazineAsset,

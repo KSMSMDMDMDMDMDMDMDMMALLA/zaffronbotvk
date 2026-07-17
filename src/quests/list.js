@@ -36,7 +36,7 @@ module.exports = Object.freeze([
   },
   {
     key: 'casino-play-50',
-    title: 'Завсегдатай казино',
+    title: 'Сыграй в казино',
     description: 'Сыграть в казино 50 раз.',
     condition: {
       type: 'stat',
@@ -275,5 +275,21 @@ module.exports = Object.freeze([
       dollars: 100000
     },
     rewardText: '100.000 $'
+  },
+  {
+    key: 'complete-first-fishing',
+    title: 'Первый улов',
+    description:
+      'Полностью завершить одну рыбалку из трёх забросов.',
+    condition: {
+      type: 'stat',
+      key: 'fishing_sessions',
+      target: 1
+    },
+    rewards: {
+      experience: 2,
+      dollars: 25000
+    },
+    rewardText: '2 EXP + 25.000 $'
   }
 ]);

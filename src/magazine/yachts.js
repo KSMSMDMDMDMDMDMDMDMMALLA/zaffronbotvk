@@ -21,11 +21,10 @@ module.exports = {
     },
     {
       key: 'yacht-motorboat',
-      title: 'Моторная лодка',
+      title: 'Моторная яхта',
       price: 750000,
       aliases: [
-        'моторная лодка',
-        'лодка'
+        'моторная яхта'
       ]
     },
     {

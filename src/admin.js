@@ -56,10 +56,10 @@ function extractVkTarget(value) {
   return String(value ?? '')
     .trim()
     .replace(
-      /^https?:\/\/(www\.)?vk\.com\//i,
+      /^https?:\/\/(www\.)?vk\.(?:ru|com)\//i,
       ''
     )
-    .replace(/^vk\.com\//i, '')
+    .replace(/^vk\.(?:ru|com)\//i, '')
     .replace(/^@/, '')
     .replace(
       /^\[id(\d+)\|.*\]$/i,
@@ -784,7 +784,7 @@ async function handleInfo(
     '📋 Информация о пользователе\n\n' +
     `👤 Имя: ${getUserName(user)}\n` +
     `🆔 VK ID: ${userId}\n` +
-    `🔗 Адрес: vk.com/${getDomain(user)}\n` +
+    `🔗 Адрес: vk.ru/${getDomain(user)}\n` +
     `🚻 Пол: ${getSexName(user.sex)}\n` +
     `🌍 Город: ${getLocation(user)}\n` +
     `🎂 Дата рождения: ${user.bdate || 'Не указана'}\n` +

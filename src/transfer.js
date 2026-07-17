@@ -27,10 +27,10 @@ function extractVkTarget(value) {
   return String(value ?? '')
     .trim()
     .replace(
-      /^https?:\/\/(www\.)?vk\.com\//i,
+      /^https?:\/\/(www\.)?vk\.(?:ru|com)\//i,
       ''
     )
-    .replace(/^vk\.com\//i, '')
+    .replace(/^vk\.(?:ru|com)\//i, '')
     .replace(/^@/, '')
     .replace(
       /^\[id(\d+)\|.*\]$/i,
@@ -86,7 +86,7 @@ function parseTransferArguments(
   }
 
   const targetMatch = argumentsText.match(
-    /^(.+?)\s+(\[id\d+\|.+\]|@\S+|(?:https?:\/\/)?(?:www\.)?vk\.com\/\S+|id\d+|\S+)$/i
+    /^(.+?)\s+(\[id\d+\|.+\]|@\S+|(?:https?:\/\/)?(?:www\.)?vk\.(?:ru|com)\/\S+|id\d+|\S+)$/i
   );
 
   if (!targetMatch) {

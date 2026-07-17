@@ -3,6 +3,7 @@ const houses = require('./houses');
 const businesses = require('./businesses');
 const planes = require('./planes');
 const yachts = require('./yachts');
+const boats = require('./boats');
 const boosts = require('./boosts');
 
 const categories = [
@@ -11,6 +12,7 @@ const categories = [
   businesses,
   planes,
   yachts,
+  boats,
   boosts
 ];
 
