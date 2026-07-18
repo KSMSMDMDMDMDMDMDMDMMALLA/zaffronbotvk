@@ -30,6 +30,8 @@ const previewButton =
 const message =
   document.querySelector('#message');
 
+let launchRole = '';
+
 function setMessage(text, type = '') {
   message.textContent = text;
   message.className = `message ${type}`.trim();
@@ -41,6 +43,20 @@ function getGroupId() {
   return Number.isInteger(groupId) && groupId > 0
     ? groupId
     : null;
+}
+
+function getBridgeError(error) {
+  const errorData = error?.error_data ?? {};
+  const details = [
+    error?.error_type,
+    errorData.error_code,
+    errorData.error_reason,
+    errorData.error_description
+  ].filter(Boolean);
+
+  return details.length > 0
+    ? ` (${details.join(': ')})`
+    : '';
 }
 
 function getPreviewCode(groupId) {
@@ -72,9 +88,31 @@ async function initialize() {
   try {
     await bridge.send('VKWebAppInit');
 
-    if (launchGroupId > 0) {
-      groupInput.value = String(launchGroupId);
-      groupStatus.textContent = `ID ${launchGroupId}`;
+    let launchParams = null;
+
+    try {
+      launchParams = await bridge.send(
+        'VKWebAppGetLaunchParams',
+        {}
+      );
+    } catch {
+      launchParams = null;
+    }
+
+    const bridgeGroupId = Number(
+      launchParams?.vk_group_id
+    );
+    const currentGroupId = bridgeGroupId > 0
+      ? bridgeGroupId
+      : launchGroupId;
+
+    launchRole = launchParams?.vk_viewer_group_role ?? '';
+
+    if (currentGroupId > 0) {
+      groupInput.value = String(currentGroupId);
+      groupStatus.textContent = launchRole
+        ? `ID ${currentGroupId} • ${launchRole}`
+        : `ID ${currentGroupId}`;
     } else {
       groupStatus.textContent = 'Укажи ID ниже';
     }
@@ -134,6 +172,22 @@ tokenButton.addEventListener('click', async () => {
     return;
   }
 
+  if (groupId === appId) {
+    setMessage(
+      `${appId} — это ID приложения. Нужен ID сообщества. Запусти приложение кнопкой из своей группы.`,
+      'error'
+    );
+    return;
+  }
+
+  if (launchRole && launchRole !== 'admin') {
+    setMessage(
+      `Твоя роль в сообществе: ${launchRole}. Токен может получить только администратор.`,
+      'error'
+    );
+    return;
+  }
+
   tokenButton.disabled = true;
   setMessage('Запрашиваем доступ у VK…');
 
@@ -155,7 +209,7 @@ tokenButton.addEventListener('click', async () => {
     );
   } catch (error) {
     setMessage(
-      'Не удалось получить токен. Проверь, что приложение установлено в сообществе и ты являешься администратором.',
+      `Не удалось получить токен${getBridgeError(error)}. Проверь права администратора и ID сообщества.`,
       'error'
     );
   } finally {
@@ -204,9 +258,9 @@ previewButton.addEventListener('click', async () => {
       'Виджет установлен. После запуска бота в нём появится настоящий топ.',
       'success'
     );
-  } catch {
+  } catch (error) {
     setMessage(
-      'Открой Mini App с компьютера VK и повтори установку виджета.',
+      `Не удалось установить виджет${getBridgeError(error)}. Открой Mini App с компьютера VK и повтори попытку.`,
       'error'
     );
   } finally {

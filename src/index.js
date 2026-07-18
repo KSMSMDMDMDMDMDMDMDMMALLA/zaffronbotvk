@@ -48,6 +48,7 @@ const {
   getMagazineAssets,
   getTotalAura,
   getUserByVkId,
+  incrementQuestStat,
   initializeDatabase,
   saveUser
 } = require('./database');
@@ -143,6 +144,40 @@ function createHelpKeyboard() {
       label: '❓ FAQ',
       payload: {
         command: 'faq'
+      },
+      color: Keyboard.SECONDARY_COLOR
+    })
+    .inline();
+}
+
+function createCommandsKeyboard() {
+  return Keyboard.builder()
+    .textButton({
+      label: '💙 Основное',
+      payload: {
+        command: 'commands_main'
+      },
+      color: Keyboard.PRIMARY_COLOR
+    })
+    .textButton({
+      label: '💵 Заработок',
+      payload: {
+        command: 'commands_earnings'
+      },
+      color: Keyboard.POSITIVE_COLOR
+    })
+    .row()
+    .textButton({
+      label: '🎉 Развлечения',
+      payload: {
+        command: 'commands_fun'
+      },
+      color: Keyboard.NEGATIVE_COLOR
+    })
+    .textButton({
+      label: '📄 Прочее',
+      payload: {
+        command: 'commands_other'
       },
       color: Keyboard.SECONDARY_COLOR
     })
@@ -371,37 +406,73 @@ async function sendWithBanner(
 
 function getCommandsText() {
   return (
-    '📋 Команды Zaffron\n\n' +
+    '╭─── 📋 Zaffron ───╮\n\n' +
+    'Выбери раздел команд кнопками ниже:\n\n' +
     '💙 Основное\n' +
-    '• !п — профиль\n' +
-    '• !баланс — баланс\n' +
-    '• !топ баланс — топ-10 по деньгам\n' +
-    '• !передать [сумма] [user/реплай]\n' +
-    '• !promo [код]\n' +
-    '• !квесты\n\n' +
-    '💼 Экономика\n' +
-    '• !работы / !работать [работа]\n' +
-    '• !магазин / !имущество\n' +
-    '• !бизнес / !банк\n' +
-    '• !коробка\n' +
-    '• !рыбачить / !улов\n' +
-    '• !перелёт / !переезд [страна]\n\n' +
+    '💵 Заработок\n' +
     '🎉 Развлечения\n' +
-    '• !zaff стоит ли [вопрос]\n' +
-    '• !скажи [текст]\n' +
-    '• !кто [текст]\n' +
-    '• !мем / !мемдуэль [user]\n' +
-    '• +аура [реплай] / !топ ауры\n' +
-    '• !картошка / !бомба / !реакция\n' +
-    '• !казино [ставка] / !угадай\n' +
-    '• !гонка [user] [ставка]\n' +
-    '• !обнять, !поцеловать, !погладить [реплай]\n\n' +
-    '🧰 Полезное\n' +
-    '• !анализ [ссылка/user]\n' +
-    '• !вики [запрос]\n' +
-    '• !qr [текст/ссылка]\n' +
-    '• В ЛС отправь фото — появятся эффекты'
+    '📄 Прочее\n\n' +
+    '╰──────────────╯'
   );
+}
+
+function getCommandsSectionText(section) {
+  const sections = {
+    main:
+      '╭─── 💙 Основное ───╮\n\n' +
+      '│\n' +
+      '├ 👤 !п — профиль\n' +
+      '├ 💵 !баланс — игровой баланс\n' +
+      '├ 🏆 !топ баланс — топ-10 по балансу\n' +
+      '├ 💸 !передать [сумма] [user / реплай]\n' +
+      '├ 🎟 !promo [код] — активировать промокод\n' +
+      '├ 📋 !команды — меню команд\n' +
+      '└ ❓ FAQ -\n\n' +
+      '╰──────────────╯',
+    earnings:
+      '╭─── 💵 Заработок ───╮\n\n' +
+      '│\n' +
+      '├ 💼 !работы — список работ\n' +
+      '├ 🔨 !работать [работа] — начать смену\n' +
+      '├ 🎁 !коробка — открыть коробку\n' +
+      '├ 🛒 !магазин — магазин имущества\n' +
+      '├ 🏠 !имущество — твоё имущество\n' +
+      '├ 🏢 !бизнес — управление бизнесами\n' +
+      '├ 🏦 !банк — вклад и проценты\n' +
+      '├ 🎯 !квесты — список квестов\n' +
+      '├ 🎣 !рыбачить — начать рыбалку\n' +
+      '├ 🧺 !улов — посмотреть улов\n' +
+      '└ ✈ !перелёт / !переезд [страна]\n\n' +
+      '╰──────────────╯',
+    fun:
+      '╭─── 🎉 Развлечения ───╮\n\n' +
+      '│\n' +
+      '├ 🔮 !zaff стоит ли [вопрос]\n' +
+      '├ 🔊 !скажи [текст]\n' +
+      '├ 🤔 !кто [текст]\n' +
+      '├ 😂 !мем\n' +
+      '├ ✨ +аура [реплай]\n' +
+      '├ ✨ !топ ауры\n' +
+      '├ 🌌 !мемдуэль [username / реплай]\n' +
+      '├ 🥔 !картошка\n' +
+      '├ 💣 !бомба\n' +
+      '├ ⚡ !реакция\n' +
+      '├ 🎰 !казино [число]\n' +
+      '├ 🎯 !угадай [число]\n' +
+      '├ 🏁 !гонка [user] [ставка]\n' +
+      '└ 💞 !обнять / !поцеловать / !погладить\n\n' +
+      '╰──────────────╯',
+    other:
+      '╭─── 📄 Прочее ───╮\n\n' +
+      '│\n' +
+      '├ 🔍 !анализ [ссылка | @username]\n' +
+      '├ 📚 !вики [запрос]\n' +
+      '├ 🌠 Обработка фотографии [в лс бота]\n' +
+      '└ 💚 !qr [текст / ссылка]\n\n' +
+      '╰──────────────╯'
+  };
+
+  return sections[section] ?? getCommandsText();
 }
 
 async function sendStart(context, vk) {
@@ -428,9 +499,21 @@ async function sendCommands(context, vk) {
     'commands',
     {
       message: getCommandsText(),
-      keyboard: createHelpKeyboard()
+      keyboard: createCommandsKeyboard()
     }
   );
+
+  return true;
+}
+
+async function sendCommandsSection(
+  context,
+  section
+) {
+  await context.send({
+    message: getCommandsSectionText(section),
+    keyboard: createCommandsKeyboard()
+  });
 
   return true;
 }
@@ -490,6 +573,12 @@ function getBusinessProfileText(vkId) {
 
 async function sendProfile(context, vk) {
   const vkId = Number(context.senderId);
+
+  incrementQuestStat(
+    vkId,
+    'profile_views'
+  );
+
   const user = getUserByVkId(vkId);
   const jobProfile = getJobProfile(vkId);
   const experienceRequired =
@@ -934,6 +1023,32 @@ async function handleCoreCommand(
     return sendCommands(context, vk);
   }
 
+  const commandsSectionByPayload = {
+    commands_main: 'main',
+    commands_earnings: 'earnings',
+    commands_fun: 'fun',
+    commands_other: 'other'
+  };
+
+  const commandsSection =
+    commandsSectionByPayload[payload?.command] ||
+    (/^(?:💙\s*)?основное$/i.test(originalText)
+      ? 'main'
+      : /^(?:💵\s*)?заработок$/i.test(originalText)
+        ? 'earnings'
+        : /^(?:🎉\s*)?развлечения$/i.test(originalText)
+          ? 'fun'
+          : /^(?:📄\s*)?прочее$/i.test(originalText)
+            ? 'other'
+            : null);
+
+  if (commandsSection) {
+    return sendCommandsSection(
+      context,
+      commandsSection
+    );
+  }
+
   if (
     payload?.command === 'faq' ||
     /^!?faq$/i.test(originalText)
@@ -1037,7 +1152,7 @@ async function handleUnknownCommand(
     return true;
   }
 
-  if (!/^[!+\\]/.test(originalText)) {
+  if (!originalText) {
     return false;
   }
 
@@ -1143,6 +1258,7 @@ module.exports = {
   createVk,
   dispatchMessage,
   getCommandsText,
+  getCommandsSectionText,
   handleCoreCommand,
   start
 };
