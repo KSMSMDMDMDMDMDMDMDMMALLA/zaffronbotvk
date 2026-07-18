@@ -48,7 +48,6 @@ const {
   getMagazineAssets,
   getTotalAura,
   getUserByVkId,
-  incrementQuestStat,
   initializeDatabase,
   saveUser
 } = require('./database');
@@ -120,7 +119,7 @@ function createStartKeyboard() {
       payload: {
         command: 'profile'
       },
-      color: Keyboard.PRIMARY_COLOR
+      color: Keyboard.SECONDARY_COLOR
     })
     .textButton({
       label: '📋 !команды',
@@ -157,7 +156,7 @@ function createCommandsKeyboard() {
       payload: {
         command: 'commands_main'
       },
-      color: Keyboard.PRIMARY_COLOR
+      color: Keyboard.SECONDARY_COLOR
     })
     .textButton({
       label: '💵 Заработок',
@@ -172,7 +171,7 @@ function createCommandsKeyboard() {
       payload: {
         command: 'commands_fun'
       },
-      color: Keyboard.NEGATIVE_COLOR
+      color: Keyboard.SECONDARY_COLOR
     })
     .textButton({
       label: '📄 Прочее',
@@ -184,33 +183,28 @@ function createCommandsKeyboard() {
     .inline();
 }
 
-function createUnknownCommandKeyboard(
-  suggestion = null
-) {
-  const keyboard = Keyboard.builder();
-
-  if (suggestion) {
-    keyboard.textButton({
-      label: suggestion,
-      payload: {
-        command: 'suggested_command',
-        text: suggestion
-      },
-      color: Keyboard.PRIMARY_COLOR
-    });
-  }
-
-  keyboard
+function createCommandsBackKeyboard() {
+  return Keyboard.builder()
     .textButton({
-      label: '📋 !команды',
+      label: '⬅ Все разделы',
       payload: {
         command: 'commands'
       },
       color: Keyboard.SECONDARY_COLOR
     })
     .inline();
+}
 
-  return keyboard;
+function createUnknownCommandKeyboard() {
+  return Keyboard.builder()
+    .textButton({
+      label: '📋 Команды',
+      payload: {
+        command: 'commands'
+      },
+      color: Keyboard.SECONDARY_COLOR
+    })
+    .inline();
 }
 
 function formatDate(value) {
@@ -227,9 +221,10 @@ function formatDate(value) {
   return new Intl.DateTimeFormat(
     'ru-RU',
     {
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric'
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      timeZone: 'Europe/Moscow'
     }
   ).format(date);
 }
@@ -406,70 +401,58 @@ async function sendWithBanner(
 
 function getCommandsText() {
   return (
-    '╭─── 📋 Zaffron ───╮\n\n' +
-    'Выбери раздел команд кнопками ниже:\n\n' +
-    '💙 Основное\n' +
-    '💵 Заработок\n' +
-    '🎉 Развлечения\n' +
-    '📄 Прочее\n\n' +
-    '╰──────────────╯'
+    '📋 Команды Zaffron\n\n' +
+    'Выбери нужный раздел кнопкой ниже.'
   );
 }
 
 function getCommandsSectionText(section) {
   const sections = {
     main:
-      '╭─── 💙 Основное ───╮\n\n' +
-      '│\n' +
-      '├ 👤 !п — профиль\n' +
-      '├ 💵 !баланс — игровой баланс\n' +
-      '├ 🏆 !топ баланс — топ-10 по балансу\n' +
-      '├ 💸 !передать [сумма] [user / реплай]\n' +
-      '├ 🎟 !promo [код] — активировать промокод\n' +
-      '├ 📋 !команды — меню команд\n' +
-      '└ ❓ FAQ -\n\n' +
-      '╰──────────────╯',
+      '💙 Основное\n\n' +
+      '👤 !п — профиль\n' +
+      '💵 !баланс\n' +
+      '💸 !передать — перевод\n' +
+      '🏆 !топ баланс\n' +
+      '🎟 !promo — промокод\n' +
+      '📋 !команды — разделы',
     earnings:
-      '╭─── 💵 Заработок ───╮\n\n' +
-      '│\n' +
-      '├ 💼 !работы — список работ\n' +
-      '├ 🔨 !работать [работа] — начать смену\n' +
-      '├ 🎁 !коробка — открыть коробку\n' +
-      '├ 🛒 !магазин — магазин имущества\n' +
-      '├ 🏠 !имущество — твоё имущество\n' +
-      '├ 🏢 !бизнес — управление бизнесами\n' +
-      '├ 🏦 !банк — вклад и проценты\n' +
-      '├ 🎯 !квесты — список квестов\n' +
-      '├ 🎣 !рыбачить — начать рыбалку\n' +
-      '├ 🧺 !улов — посмотреть улов\n' +
-      '└ ✈ !перелёт / !переезд [страна]\n\n' +
-      '╰──────────────╯',
+      '💵 Заработок\n\n' +
+      '💼 !работы — список работ\n' +
+      '🔨 !работать [работа] — начать смену\n' +
+      '📦 !коробка — коробка новичка\n' +
+      '🎣 !рыбачить — рыбалка\n' +
+      '🛒 !магазин — покупки\n' +
+      '🏢 !бизнес — бизнесы\n' +
+      '🏦 !банк — вклад\n' +
+      '🎯 !квесты — задания\n' +
+      '✈ !перелёт — путешествия',
     fun:
-      '╭─── 🎉 Развлечения ───╮\n\n' +
-      '│\n' +
-      '├ 🔮 !zaff стоит ли [вопрос]\n' +
-      '├ 🔊 !скажи [текст]\n' +
-      '├ 🤔 !кто [текст]\n' +
-      '├ 😂 !мем\n' +
-      '├ ✨ +аура [реплай]\n' +
-      '├ ✨ !топ ауры\n' +
-      '├ 🌌 !мемдуэль [username / реплай]\n' +
-      '├ 🥔 !картошка\n' +
-      '├ 💣 !бомба\n' +
-      '├ ⚡ !реакция\n' +
-      '├ 🎰 !казино [число]\n' +
-      '├ 🎯 !угадай [число]\n' +
-      '├ 🏁 !гонка [user] [ставка]\n' +
-      '└ 💞 !обнять / !поцеловать / !погладить\n\n' +
-      '╰──────────────╯',
+      '🎉 Развлечения\n\n' +
+      '🔮 !zaff стоит ли [вопрос]\n' +
+      '🔊 !скажи — озвучка\n' +
+      '🤔 !кто — выбор игрока\n' +
+      '😂 !мем\n' +
+      '✨ +аура — выдать\n' +
+      '✨ !топ ауры\n' +
+      '🌌 !мемдуэль — вызов\n' +
+      '🥔 !картошка\n' +
+      '💣 !бомба\n' +
+      '⚡ !реакция\n' +
+      '🎰 !казино [ставка]\n' +
+      '🏁 !гонка — вызов\n' +
+      '🤗 !обнять [реплай]\n' +
+      '💋 !поцеловать [реплай]\n' +
+      '🫂 !погладить [реплай]\n' +
+      '🙌 !дать пять [реплай]\n' +
+      '😉 !подмигнуть [реплай]\n' +
+      '🎯 !угадай',
     other:
-      '╭─── 📄 Прочее ───╮\n\n' +
-      '│\n' +
-      '├ 🔍 !анализ [ссылка | @username]\n' +
-      '├ 📚 !вики [запрос]\n' +
-      '├ 🌠 Обработка фотографии [в лс бота]\n' +
-      '└ 💚 !qr [текст / ссылка]\n\n' +
-      '╰──────────────╯'
+      '📄 Прочее\n\n' +
+      '🔍 !анализ — профиль VK\n' +
+      '📚 !вики [запрос]\n' +
+      '🌠 Фото — отправь в ЛС\n' +
+      '💚 !qr [текст/ссылка]'
   };
 
   return sections[section] ?? getCommandsText();
@@ -512,7 +495,7 @@ async function sendCommandsSection(
 ) {
   await context.send({
     message: getCommandsSectionText(section),
-    keyboard: createCommandsKeyboard()
+    keyboard: createCommandsBackKeyboard()
   });
 
   return true;
@@ -573,12 +556,6 @@ function getBusinessProfileText(vkId) {
 
 async function sendProfile(context, vk) {
   const vkId = Number(context.senderId);
-
-  incrementQuestStat(
-    vkId,
-    'profile_views'
-  );
-
   const user = getUserByVkId(vkId);
   const jobProfile = getJobProfile(vkId);
   const experienceRequired =
@@ -589,16 +566,17 @@ async function sendProfile(context, vk) {
       : `${jobProfile.experience}/${experienceRequired}`;
 
   const message =
-    `👤 Профиль @id${vkId} (${getUserName(user, vkId)})\n\n` +
-    `📅 В боте с: ${formatDate(user?.created_at)}\n` +
+    '👤 Профиль\n\n' +
+    `🆔 ID: ${vkId}\n` +
+    `👤 Имя: ${getUserName(user, vkId)}\n` +
     `✨ Аура: ${getTotalAura(vkId)}\n` +
     `💵 Баланс: ${formatMoney(getBalance(vkId))} $\n` +
-    `🥔 Долг в играх: ${formatMoney(getGameDebt(vkId))} $\n` +
-    `⭐ Уровень: ${jobProfile.level}/${JOB_MAX_LEVEL}\n` +
+    `🥔 Долг в играх: ${formatMoney(getGameDebt(vkId))} $\n\n` +
+    `⭐ Уровень: ${jobProfile.level}\n` +
     `📈 EXP: ${experienceText}\n\n` +
-    `${magazine.getProfileText(vkId)}\n` +
-    `${getBusinessProfileText(vkId)}\n\n` +
-    travel.getProfileText(vkId);
+    `${travel.getProfileText(vkId)}\n\n` +
+    `${magazine.getProfileText(vkId)}\n\n` +
+    `📅 Регистрация: ${formatDate(user?.created_at)}`;
 
   await sendWithBanner(
     context,
@@ -606,8 +584,7 @@ async function sendProfile(context, vk) {
     'profile',
     {
       message,
-      keyboard: createHelpKeyboard(),
-      disable_mentions: false
+      keyboard: createStartKeyboard()
     }
   );
 
@@ -1144,22 +1121,24 @@ async function handleUnknownCommand(
   if (suggestion) {
     await context.send({
       message:
-        `🤔 Возможно, ты имел в виду: ${suggestion}`,
-      keyboard:
-        createUnknownCommandKeyboard(suggestion)
+        '❌ Такой команды не существует!\n\n' +
+        '💡 Правильная команда:\n' +
+        `${suggestion}\n\n` +
+        '📋 Нажми на кнопку ниже, чтобы посмотреть список команд.',
+      keyboard: createUnknownCommandKeyboard()
     });
 
     return true;
   }
 
-  if (!originalText) {
+  if (!/^[!+\\]/.test(originalText)) {
     return false;
   }
 
   await context.send({
     message:
       '❌ Такой команды не существует.\n\n' +
-      'Нажми кнопку ниже, чтобы открыть список команд.',
+      '📋 Нажми на кнопку ниже, чтобы посмотреть список команд.',
     keyboard: createUnknownCommandKeyboard()
   });
 
@@ -1240,6 +1219,7 @@ async function start() {
   await vk.updates.start();
 
   console.log('Zaffron запущен и ждёт сообщения.');
+  console.log('Интерфейс команд: 4 раздела, сборка 19.07.2026.');
 
   return vk;
 }
