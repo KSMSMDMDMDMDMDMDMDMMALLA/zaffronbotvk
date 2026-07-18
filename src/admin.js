@@ -17,9 +17,7 @@ const {
   resetBalance,
   createPromo,
   getGameDebt,
-  getJobProfile,
-  getUserCount,
-  getAllUserIds
+  getJobProfile
 } = require('./database');
 
 /*
@@ -51,6 +49,7 @@ const MAX_PROMO_AMOUNT = 1000000000;
 const ADMIN_AURA_PEER_ID = 0;
 const MAX_BROADCAST_LENGTH = 3500;
 const BROADCAST_DELAY_MS = 100;
+const CONVERSATIONS_PAGE_SIZE = 200;
 
 function isAdmin(userId) {
   return ADMIN_IDS.has(
@@ -261,16 +260,134 @@ function delay(milliseconds) {
   });
 }
 
-async function handleUsers(context) {
+function isAllowedToWrite(conversation) {
+  const allowed =
+    conversation?.can_write?.allowed;
+
+  return allowed !== false && allowed !== 0;
+}
+
+function getConversationTarget(item) {
+  const conversation = item?.conversation;
+  const peer = conversation?.peer;
+  const peerId = Number(peer?.id);
+  const peerType = String(peer?.type ?? '');
+
+  if (!Number.isInteger(peerId)) {
+    return null;
+  }
+
+  if (peerType === 'user' && peerId > 0) {
+    return {
+      peerId,
+      type: 'user',
+      canWrite: isAllowedToWrite(conversation)
+    };
+  }
+
+  if (
+    peerType === 'chat' &&
+    peerId >= 2000000000
+  ) {
+    const state =
+      conversation?.chat_settings?.state;
+
+    if (
+      state &&
+      state !== 'in'
+    ) {
+      return null;
+    }
+
+    if (!state && !isAllowedToWrite(conversation)) {
+      return null;
+    }
+
+    return {
+      peerId,
+      type: 'chat',
+      canWrite: isAllowedToWrite(conversation)
+    };
+  }
+
+  return null;
+}
+
+async function getConversationAudience(vk) {
+  const targetsByPeerId = new Map();
+  let offset = 0;
+  let totalCount = null;
+
+  while (
+    totalCount === null ||
+    offset < totalCount
+  ) {
+    const response =
+      await vk.api.messages.getConversations({
+        offset,
+        count: CONVERSATIONS_PAGE_SIZE,
+        filter: 'all',
+        extended: 0
+      });
+
+    const items = Array.isArray(response?.items)
+      ? response.items
+      : [];
+
+    totalCount = Math.max(
+      0,
+      Number(response?.count) || 0
+    );
+
+    for (const item of items) {
+      const target =
+        getConversationTarget(item);
+
+      if (target) {
+        targetsByPeerId.set(
+          target.peerId,
+          target
+        );
+      }
+    }
+
+    if (items.length === 0) {
+      break;
+    }
+
+    offset += items.length;
+  }
+
+  const targets = [
+    ...targetsByPeerId.values()
+  ];
+
+  return {
+    users: targets.filter(
+      target => target.type === 'user'
+    ),
+    chats: targets.filter(
+      target => target.type === 'chat'
+    )
+  };
+}
+
+async function handleUsers(context, vk) {
   if (!await requireAdmin(context)) {
     return true;
   }
 
-  const userCount = getUserCount();
+  const audience =
+    await getConversationAudience(vk);
+  const total =
+    audience.users.length +
+    audience.chats.length;
 
   await context.reply(
-    '👥 Пользователи бота\n\n' +
-    `📊 Всего пользователей: ${userCount}`
+    '📊 Статистика бота\n\n' +
+    `👤 Пользователей в ЛС: ${audience.users.length}\n` +
+    `💬 Бесед с ботом: ${audience.chats.length}\n` +
+    `📨 Всего диалогов: ${total}`
   );
 
   return true;
@@ -307,40 +424,66 @@ async function handleSms(
     return true;
   }
 
-  const userIds = getAllUserIds();
+  const audience =
+    await getConversationAudience(vk);
+  const targets = [
+    ...audience.users,
+    ...audience.chats
+  ];
 
-  if (userIds.length === 0) {
+  if (targets.length === 0) {
     await context.reply(
-      '❌ В базе пока нет пользователей для рассылки.'
+      '❌ У бота пока нет диалогов для рассылки.'
     );
 
     return true;
   }
 
   await context.reply(
-    '📨 Рассылка запущена.\n' +
-    `👥 Получателей: ${userIds.length}`
+    '📨 Рассылка запущена.\n\n' +
+    `👤 Пользователей в ЛС: ${audience.users.length}\n` +
+    `💬 Бесед: ${audience.chats.length}`
   );
 
-  let delivered = 0;
-  let failed = 0;
+  const result = {
+    users: {
+      delivered: 0,
+      failed: 0
+    },
+    chats: {
+      delivered: 0,
+      failed: 0
+    }
+  };
 
-  for (const userId of userIds) {
+  for (const target of targets) {
+    const resultKey =
+      target.type === 'chat'
+        ? 'chats'
+        : 'users';
+
     try {
+      if (!target.canWrite) {
+        throw new Error(
+          'VK запретил отправку в этот диалог'
+        );
+      }
+
       await vk.api.messages.send({
-        peer_id: userId,
+        peer_id: target.peerId,
         random_id: 0,
         message:
           '📢 Сообщение от администрации\n\n' +
           message
       });
 
-      delivered += 1;
+      result[resultKey].delivered += 1;
     } catch (error) {
-      failed += 1;
+      result[resultKey].failed += 1;
 
       console.error(
-        `Не удалось отправить рассылку пользователю ${userId}:`,
+        'Не удалось отправить рассылку в диалог ' +
+        `${target.peerId}:`,
         error?.message ?? error
       );
     }
@@ -352,8 +495,12 @@ async function handleSms(
 
   await context.reply(
     '✅ Рассылка завершена.\n\n' +
-    `📬 Доставлено: ${delivered}\n` +
-    `❌ Не доставлено: ${failed}`
+    '👤 Личные сообщения: ' +
+    `${result.users.delivered}/${audience.users.length}\n` +
+    '💬 Беседы: ' +
+    `${result.chats.delivered}/${audience.chats.length}\n` +
+    '❌ Не доставлено: ' +
+    `${result.users.failed + result.chats.failed}`
   );
 
   return true;
@@ -929,7 +1076,7 @@ async function handle(
 
   try {
     if (/^\\users$/i.test(originalText)) {
-      return handleUsers(context);
+      return handleUsers(context, vk);
     }
 
     let match =

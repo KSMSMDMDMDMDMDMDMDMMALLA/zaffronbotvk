@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#0b1220" />
+    <title>Zaffron — топ по балансу</title>
+    <script type="module" crossorigin src="./assets/index-NRoZfyXV.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-WZiWBBYb.css">
+  </head>
+  <body>
+    <main class="app">
+      <section class="hero">
+        <div class="logo">Z</div>
+        <div>
+          <p class="eyebrow">ZAFFRON MINI APP</p>
+          <h1>Топ по балансу</h1>
+          <p class="subtitle">
+            Подключение виджета сообщества с десятью лучшими игроками.
+          </p>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="status-row">
+          <span>Сообщество</span>
+          <strong id="group-status">Определяем…</strong>
+        </div>
+
+        <button id="add-community-button" class="primary" type="button">
+          Добавить приложение в сообщество
+        </button>
+
+        <label class="field">
+          <span>ID сообщества</span>
+          <input
+            id="group-id"
+            type="number"
+            inputmode="numeric"
+            placeholder="Например: 123456789"
+          />
+        </label>
+
+        <button id="token-button" class="secondary" type="button">
+          Получить токен виджета
+        </button>
+
+        <p class="hint">
+          Кнопка доступна администратору сообщества. Токен имеет только право
+          обновлять виджет.
+        </p>
+      </section>
+
+      <section id="token-card" class="card hidden">
+        <h2>Токен получен</h2>
+        <p class="hint">
+          Скопируй его в <code>VK_WIDGET_TOKEN</code> на хостинге бота.
+        </p>
+        <textarea id="token-value" readonly></textarea>
+        <button id="copy-button" class="secondary" type="button">
+          Скопировать токен
+        </button>
+        <button id="preview-button" class="primary preview-button" type="button">
+          Установить виджет в сообщество
+        </button>
+      </section>
+
+      <section class="preview-card">
+        <p class="preview-title">💵 Лучшие игроки по балансу 💵</p>
+        <div class="table-head">
+          <span>Место</span><span>Игрок</span><span>Баланс</span>
+        </div>
+        <div class="preview-row gold">
+          <span>1</span><strong>Лучший игрок</strong><span>1.000.000 $</span>
+        </div>
+        <div class="preview-row silver">
+          <span>2</span><strong>Игрок Zaffron</strong><span>750.000 $</span>
+        </div>
+        <div class="preview-row bronze">
+          <span>3</span><strong>Новый игрок</strong><span>500.000 $</span>
+        </div>
+      </section>
+
+      <p id="message" class="message"></p>
+    </main>
+
+  </body>
+</html>
