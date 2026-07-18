@@ -17,7 +17,9 @@ const {
   resetBalance,
   createPromo,
   getGameDebt,
-  getJobProfile
+  getJobProfile,
+  getUserCount,
+  getAllUserIds
 } = require('./database');
 
 /*
@@ -35,6 +37,8 @@ const {
  * \reset$ @username
  * \addpromo SUMMER aura 50
  * \addpromo MONEY $ 1000
+ * \users
+ * \sms Текст рассылки
  */
 
 const ADMIN_IDS = new Set([
@@ -45,6 +49,8 @@ const MAX_AURA_AMOUNT = 1000000;
 const MAX_BALANCE_AMOUNT = 1000000000;
 const MAX_PROMO_AMOUNT = 1000000000;
 const ADMIN_AURA_PEER_ID = 0;
+const MAX_BROADCAST_LENGTH = 3500;
+const BROADCAST_DELAY_MS = 100;
 
 function isAdmin(userId) {
   return ADMIN_IDS.has(
@@ -247,6 +253,110 @@ async function requireAdmin(context) {
   );
 
   return false;
+}
+
+function delay(milliseconds) {
+  return new Promise(resolve => {
+    setTimeout(resolve, milliseconds);
+  });
+}
+
+async function handleUsers(context) {
+  if (!await requireAdmin(context)) {
+    return true;
+  }
+
+  const userCount = getUserCount();
+
+  await context.reply(
+    '👥 Пользователи бота\n\n' +
+    `📊 Всего пользователей: ${userCount}`
+  );
+
+  return true;
+}
+
+async function handleSms(
+  context,
+  vk,
+  rawMessage
+) {
+  if (!await requireAdmin(context)) {
+    return true;
+  }
+
+  const message =
+    String(rawMessage ?? '').trim();
+
+  if (!message) {
+    await context.reply(
+      '❌ Укажи текст рассылки.\n\n' +
+      'Пример:\n' +
+      '\\sms Сегодня вышло обновление!'
+    );
+
+    return true;
+  }
+
+  if (message.length > MAX_BROADCAST_LENGTH) {
+    await context.reply(
+      '❌ Текст рассылки слишком длинный. ' +
+      `Максимум: ${MAX_BROADCAST_LENGTH} символов.`
+    );
+
+    return true;
+  }
+
+  const userIds = getAllUserIds();
+
+  if (userIds.length === 0) {
+    await context.reply(
+      '❌ В базе пока нет пользователей для рассылки.'
+    );
+
+    return true;
+  }
+
+  await context.reply(
+    '📨 Рассылка запущена.\n' +
+    `👥 Получателей: ${userIds.length}`
+  );
+
+  let delivered = 0;
+  let failed = 0;
+
+  for (const userId of userIds) {
+    try {
+      await vk.api.messages.send({
+        peer_id: userId,
+        random_id: 0,
+        message:
+          '📢 Сообщение от администрации\n\n' +
+          message
+      });
+
+      delivered += 1;
+    } catch (error) {
+      failed += 1;
+
+      console.error(
+        `Не удалось отправить рассылку пользователю ${userId}:`,
+        error?.message ?? error
+      );
+    }
+
+    if (BROADCAST_DELAY_MS > 0) {
+      await delay(BROADCAST_DELAY_MS);
+    }
+  }
+
+  await context.reply(
+    '✅ Рассылка завершена.\n\n' +
+    `📬 Доставлено: ${delivered}\n` +
+    `❌ Не доставлено: ${failed}`
+  );
+
+  return true;
 }
 
 async function handleAdd(
@@ -818,7 +928,24 @@ async function handle(
       .trim();
 
   try {
+    if (/^\\users$/i.test(originalText)) {
+      return handleUsers(context);
+    }
+
     let match =
+      originalText.match(
+        /^\\sms(?:\s+([\s\S]+))?$/i
+      );
+
+    if (match) {
+      return handleSms(
+        context,
+        vk,
+        match[1]
+      );
+    }
+
+    match =
       originalText.match(
         /^\\addpromo\s+("[^"]+"|'[^']+'|\S+)\s+(aura|аура|\$)\s+(\d+)$/i
       );
@@ -956,7 +1083,7 @@ async function handle(
     }
 
     if (
-      /^\\(?:addpromo|add\$|minus\$|set\$|reset\$|add|minus|set|reset|info)(?:\s|$)/i
+      /^\\(?:users|sms|addpromo|add\$|minus\$|set\$|reset\$|add|minus|set|reset|info)(?:\s|$)/i
         .test(originalText)
     ) {
       if (!await requireAdmin(context)) {
@@ -975,7 +1102,9 @@ async function handle(
         '\\set$ @username 5000\n' +
         '\\reset$ @username\n\n' +
         '\\addpromo SUMMER aura 50\n' +
-        '\\addpromo MONEY $ 1000'
+        '\\addpromo MONEY $ 1000\n\n' +
+        '\\users\n' +
+        '\\sms Текст рассылки'
       );
 
       return true;

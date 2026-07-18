@@ -21,6 +21,7 @@ const race = require('./race');
 const travel = require('./travel');
 const fishing = require('./fishing');
 const earnings = require('./earnings');
+const rp = require('./rp');
 const {
   getCommandSuggestion
 } = require('./command-suggestions');
@@ -117,6 +118,11 @@ const COMMAND_SECTIONS = Object.freeze({
       '⚡ !реакция',
       '🎰 !казино [ставка]',
       '🏁 !гонка — вызов',
+      '🤗 !обнять [реплай]',
+      '💋 !поцеловать [реплай]',
+      '🫶 !погладить [реплай]',
+      '🙌 !дать пять [реплай]',
+      '😉 !подмигнуть [реплай]',
       '🎯 !угадай'
     ]
   },
@@ -606,6 +612,24 @@ vk.updates.on('message_new', async (context, next) => {
   
   const originalText = String(context.text ?? '').trim();
   const text = normalizeText(originalText);
+  const isPrivateMessage =
+    context.isUser && !context.isChat;
+
+  const senderId = Number(context.senderId);
+
+  if (
+    Number.isInteger(senderId) &&
+    senderId > 0 &&
+    !getUserByVkId(senderId)
+  ) {
+    const sender = await getSenderName(context);
+
+    saveUser({
+      vkId: senderId,
+      firstName: sender.firstName,
+      lastName: sender.lastName
+    });
+  }
 
 if (
   await admin.handle(
@@ -617,6 +641,10 @@ if (
 }
 
 if (await promo.handle(context)) {
+  return;
+}
+
+if (await rp.handle(context, vk)) {
   return;
 }
 
@@ -706,7 +734,7 @@ const startCommands = new Set([
   'start'
 ]);
 
-if (context.isUser && startCommands.has(text)) {
+if (isPrivateMessage && startCommands.has(text)) {
   const user = await getSenderName(context);
 
   saveUser({
@@ -1451,7 +1479,7 @@ ${result.url}`
    * Неизвестная команда — только в личных
    * сообщениях и только для текстовых сообщений.
    */
-  if (context.isUser && originalText) {
+  if (isPrivateMessage && originalText) {
     const suggestedCommand =
       getCommandSuggestion(originalText);
     const commandHint = suggestedCommand

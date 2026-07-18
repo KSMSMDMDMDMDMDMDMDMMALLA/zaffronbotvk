@@ -642,6 +642,55 @@ function getUserByVkId(vkId) {
   return user;
 }
 
+function getUserCount() {
+  ensureDatabase();
+
+  const statement = db.prepare(`
+    SELECT COUNT(*) AS user_count
+    FROM users
+    WHERE vk_id > 0
+  `);
+
+  let userCount = 0;
+
+  if (statement.step()) {
+    const row = statement.getAsObject();
+
+    userCount =
+      Number(row.user_count) || 0;
+  }
+
+  statement.free();
+
+  return userCount;
+}
+
+function getAllUserIds() {
+  ensureDatabase();
+
+  const statement = db.prepare(`
+    SELECT vk_id
+    FROM users
+    WHERE vk_id > 0
+    ORDER BY id ASC
+  `);
+
+  const userIds = [];
+
+  while (statement.step()) {
+    const row = statement.getAsObject();
+    const vkId = Number(row.vk_id);
+
+    if (Number.isInteger(vkId) && vkId > 0) {
+      userIds.push(vkId);
+    }
+  }
+
+  statement.free();
+
+  return userIds;
+}
+
 function getAura(peerId, vkId) {
   ensureDatabase();
 
@@ -5526,6 +5575,8 @@ module.exports = {
   initializeDatabase,
   saveUser,
   getUserByVkId,
+  getUserCount,
+  getAllUserIds,
 
   getAura,
   getTotalAura,

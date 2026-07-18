@@ -81,6 +81,31 @@ const COMMANDS = Object.freeze([
     usage: '!гонка [username] [ставка]',
     acceptsArguments: true
   },
+  {
+    command: '!обнять',
+    usage: '!обнять [реплай]',
+    acceptsArguments: true
+  },
+  {
+    command: '!поцеловать',
+    usage: '!поцеловать [реплай]',
+    acceptsArguments: true
+  },
+  {
+    command: '!погладить',
+    usage: '!погладить [реплай]',
+    acceptsArguments: true
+  },
+  {
+    command: '!дать пять',
+    usage: '!дать пять [реплай]',
+    acceptsArguments: true
+  },
+  {
+    command: '!подмигнуть',
+    usage: '!подмигнуть [реплай]',
+    acceptsArguments: true
+  },
   { command: '!угадай', usage: '!угадай' },
   {
     command: '!анализ',
