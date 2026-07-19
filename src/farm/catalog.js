@@ -18,12 +18,12 @@ const PLOT_PRICES = Object.freeze([
 ]);
 
 const WAREHOUSE_CAPACITIES = Object.freeze([
-  100,
-  250,
-  600,
-  1_500,
-  4_000,
-  12_000
+  10_000,
+  50_000,
+  200_000,
+  1_000_000,
+  5_000_000,
+  25_000_000
 ]);
 
 const CROPS = Object.freeze([
@@ -37,6 +37,7 @@ const CROPS = Object.freeze([
     growTimeMs: 2 * MINUTE_MS,
     minYield: 5,
     maxYield: 8,
+    maxSeedsPerPlot: 1000,
     germinationChance: 97,
     growthChance: 96,
     aliases: ['пшеница', 'пшеницу']
@@ -51,6 +52,7 @@ const CROPS = Object.freeze([
     growTimeMs: 5 * MINUTE_MS,
     minYield: 5,
     maxYield: 8,
+    maxSeedsPerPlot: 1000,
     germinationChance: 96,
     growthChance: 94,
     aliases: ['свекла', 'свёкла', 'свеклу', 'свёклу']
@@ -65,6 +67,7 @@ const CROPS = Object.freeze([
     growTimeMs: 15 * MINUTE_MS,
     minYield: 5,
     maxYield: 8,
+    maxSeedsPerPlot: 1000,
     germinationChance: 95,
     growthChance: 93,
     aliases: ['картофель', 'картошка', 'картошку']
@@ -79,6 +82,7 @@ const CROPS = Object.freeze([
     growTimeMs: 30 * MINUTE_MS,
     minYield: 5,
     maxYield: 8,
+    maxSeedsPerPlot: 1000,
     germinationChance: 94,
     growthChance: 92,
     aliases: ['морковь', 'морковка', 'морковку']
@@ -93,6 +97,7 @@ const CROPS = Object.freeze([
     growTimeMs: HOUR_MS,
     minYield: 5,
     maxYield: 7,
+    maxSeedsPerPlot: 1000,
     germinationChance: 93,
     growthChance: 91,
     aliases: ['кукуруза', 'кукурузу']
@@ -107,6 +112,7 @@ const CROPS = Object.freeze([
     growTimeMs: 2 * HOUR_MS,
     minYield: 4,
     maxYield: 7,
+    maxSeedsPerPlot: 1000,
     germinationChance: 92,
     growthChance: 90,
     aliases: ['томат', 'томаты', 'помидор', 'помидоры']
@@ -121,6 +127,7 @@ const CROPS = Object.freeze([
     growTimeMs: 4 * HOUR_MS,
     minYield: 4,
     maxYield: 7,
+    maxSeedsPerPlot: 300,
     germinationChance: 90,
     growthChance: 89,
     aliases: ['клубника', 'клубнику']
@@ -135,6 +142,7 @@ const CROPS = Object.freeze([
     growTimeMs: 8 * HOUR_MS,
     minYield: 4,
     maxYield: 6,
+    maxSeedsPerPlot: 100,
     germinationChance: 89,
     growthChance: 87,
     aliases: ['подсолнечник', 'семечки']
@@ -149,6 +157,7 @@ const CROPS = Object.freeze([
     growTimeMs: 12 * HOUR_MS,
     minYield: 3,
     maxYield: 6,
+    maxSeedsPerPlot: 10,
     germinationChance: 88,
     growthChance: 85,
     aliases: ['виноград']
@@ -163,6 +172,7 @@ const CROPS = Object.freeze([
     growTimeMs: 24 * HOUR_MS,
     minYield: 3,
     maxYield: 5,
+    maxSeedsPerPlot: 3,
     germinationChance: 86,
     growthChance: 83,
     aliases: ['арбуз', 'арбузы']
@@ -177,6 +187,7 @@ const CROPS = Object.freeze([
     growTimeMs: 48 * HOUR_MS,
     minYield: 4,
     maxYield: 6,
+    maxSeedsPerPlot: 1,
     germinationChance: 82,
     growthChance: 80,
     aliases: [

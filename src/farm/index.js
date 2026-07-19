@@ -38,6 +38,7 @@ const CUSTOM_SEED_INPUT_TTL_MS =
   2 * 60 * 1000;
 
 const pendingSeedPurchases = new Map();
+const pendingPlantings = new Map();
 const scheduledHarvestNotifications =
   new Map();
 
@@ -143,6 +144,7 @@ async function sendHarvestNotification(
         '🌾 Урожай созрел!\n\n' +
         `🗺 Участок №${result.plotNumber}\n` +
         `${crop?.emoji ?? '🌱'} ${crop?.title ?? result.cropKey}\n\n` +
+        `🌱 Посажено семян: ${result.seedQuantity}\n\n` +
         'Урожай можно собрать прямо сейчас.',
       keyboard:
         createHarvestNotificationKeyboard(
@@ -455,17 +457,49 @@ function createCropCardKeyboard(
   seedCount
 ) {
   const keyboard = Keyboard.builder();
+  const maxQuantity = Math.min(
+    seedCount,
+    crop.maxSeedsPerPlot
+  );
 
-  if (seedCount > 0) {
+  if (maxQuantity > 0) {
     keyboard.textButton({
-      label: `🌱 Посадить ${crop.title}`,
+      label: '🌱 Посадить 1',
       payload: {
         command: 'farm_plant',
         cropKey: crop.key,
-        plotNumber
+        plotNumber,
+        quantity: 1
       },
       color: Keyboard.POSITIVE_COLOR
     });
+
+    if (maxQuantity >= 10) {
+      keyboard.textButton({
+        label: '🌾 Посадить 10',
+        payload: {
+          command: 'farm_plant',
+          cropKey: crop.key,
+          plotNumber,
+          quantity: 10
+        },
+        color: Keyboard.PRIMARY_COLOR
+      });
+    }
+
+    if (maxQuantity > 1) {
+      keyboard
+        .row()
+        .textButton({
+          label: '✏ Своё количество',
+          payload: {
+            command: 'farm_plant_custom',
+            cropKey: crop.key,
+            plotNumber
+          },
+          color: Keyboard.SECONDARY_COLOR
+        });
+    }
   }
 
   keyboard
@@ -489,6 +523,32 @@ function createCropCardKeyboard(
     });
 
   return keyboard.inline();
+}
+
+function createCustomPlantKeyboard(
+  crop,
+  plotNumber
+) {
+  return Keyboard.builder()
+    .textButton({
+      label: '❌ Отменить ввод',
+      payload: {
+        command: 'farm_plant_custom_cancel',
+        cropKey: crop.key,
+        plotNumber
+      },
+      color: Keyboard.NEGATIVE_COLOR
+    })
+    .textButton({
+      label: '⬅ К посадке',
+      payload: {
+        command: 'farm_crop_open',
+        cropKey: crop.key,
+        plotNumber
+      },
+      color: Keyboard.SECONDARY_COLOR
+    })
+    .inline();
 }
 
 function createGrowingPlotKeyboard(
@@ -1008,6 +1068,7 @@ async function openPlot(context, plotNumber) {
     message:
       `🗺 Участок №${safePlotNumber}\n\n` +
       `${crop?.emoji ?? '🌾'} Культура: ${crop?.title ?? plot.cropKey}\n` +
+      `🌱 Посажено семян: ${plot.seedQuantity}\n` +
       (ready
         ? '✅ Урожай созрел и готов к сбору.\n' +
           `📦 На складе свободно: ${getWarehouseCapacity(state.warehouseLevel) - state.storageUsed}`
@@ -1146,14 +1207,16 @@ async function openCrop(
       `🌱 Шанс всходов: ${chances.germination}%\n` +
       `🌿 Шанс созревания: ${chances.growth}%\n` +
       `🎯 Итоговый шанс урожая: ${chances.total}%\n` +
-      `🧺 Возможный сбор: ${yieldRange.min}–${yieldRange.max} ед.\n` +
-      `💵 Возможная выручка: ${formatMoney(yieldRange.min * crop.sellPrice)}–${formatMoney(yieldRange.max * crop.sellPrice)} ₽\n` +
+      `🧺 С одного семени: ${yieldRange.min}–${yieldRange.max} ед.\n` +
+      `💵 Выручка с одного: ${formatMoney(yieldRange.min * crop.sellPrice)}–${formatMoney(yieldRange.max * crop.sellPrice)} ₽\n` +
+      `🌾 Лимит участка: ${crop.maxSeedsPerPlot} семян\n` +
+      `🏆 Потолок участка: ${formatMoney(yieldRange.max * crop.maxSeedsPerPlot * crop.sellPrice)} ₽\n` +
       `⏳ Время роста: ${formatDuration(getCropGrowTime(crop, state.irrigationLevel))}\n\n` +
       `🛒 Цена семени: ${formatMoney(crop.seedPrice)} ₽\n` +
       `💰 Продажа урожая: ${formatMoney(crop.sellPrice)} ₽/ед.\n` +
       `🎒 Семян у тебя: ${seedCount}\n\n` +
       (seedCount > 0
-        ? 'Семя спишется сразу после посадки.'
+        ? 'Выбери количество посадки. Каждое семя получит отдельный шанс на урожай.'
         : 'Сначала купи семена этой культуры.'),
     keyboard: createCropCardKeyboard(
       crop,
@@ -1165,7 +1228,7 @@ async function openCrop(
   return true;
 }
 
-async function plantCrop(
+async function requestCustomPlantQuantity(
   context,
   cropKey,
   plotNumber
@@ -1174,6 +1237,137 @@ async function plantCrop(
   const crop = getCrop(cropKey);
   const state = getFarmState(vkId);
   const safePlotNumber = Number(plotNumber);
+
+  if (
+    !crop ||
+    !Number.isInteger(safePlotNumber) ||
+    safePlotNumber < 1 ||
+    safePlotNumber > state.plotCount ||
+    getPlot(state, safePlotNumber)
+  ) {
+    return openPlot(context, safePlotNumber);
+  }
+
+  if (state.plotCount < crop.requiredPlots) {
+    return openCrop(
+      context,
+      crop.key,
+      safePlotNumber
+    );
+  }
+
+  const seedCount = getSeedCount(
+    state,
+    crop.key
+  );
+  const maxQuantity = Math.min(
+    seedCount,
+    crop.maxSeedsPerPlot
+  );
+
+  if (maxQuantity <= 0) {
+    return openCrop(
+      context,
+      crop.key,
+      safePlotNumber
+    );
+  }
+
+  pendingSeedPurchases.delete(vkId);
+  pendingPlantings.set(vkId, {
+    cropKey: crop.key,
+    plotNumber: safePlotNumber,
+    maxQuantity,
+    expiresAt:
+      Date.now() +
+      CUSTOM_SEED_INPUT_TTL_MS
+  });
+
+  await context.send({
+    message:
+      `✏ Посадка: ${crop.emoji} ${crop.title}\n\n` +
+      `🗺 Участок №${safePlotNumber}\n` +
+      `🎒 Семян в запасе: ${seedCount}\n` +
+      `🌾 Лимит этой культуры: ${crop.maxSeedsPerPlot} на участок\n\n` +
+      `Введи количество от 1 до ${maxQuantity} одним сообщением.\n` +
+      'На ввод даётся 2 минуты.',
+    keyboard: createCustomPlantKeyboard(
+      crop,
+      safePlotNumber
+    )
+  });
+
+  return true;
+}
+
+async function handleCustomPlantInput(
+  context,
+  pending,
+  originalText
+) {
+  const vkId = Number(context.senderId);
+  const crop = getCrop(pending.cropKey);
+
+  if (!crop) {
+    pendingPlantings.delete(vkId);
+    return sendPlots(context);
+  }
+
+  if (!/^\d+$/.test(originalText)) {
+    await context.send({
+      message:
+        '❌ Отправь только целое число.\n\n' +
+        `Допустимое количество: от 1 до ${pending.maxQuantity}.`,
+      keyboard: createCustomPlantKeyboard(
+        crop,
+        pending.plotNumber
+      )
+    });
+
+    return true;
+  }
+
+  const quantity = Number(originalText);
+
+  if (
+    !Number.isInteger(quantity) ||
+    quantity < 1 ||
+    quantity > pending.maxQuantity
+  ) {
+    await context.send({
+      message:
+        '❌ Столько семян нельзя разместить на этом участке.\n\n' +
+        `Введи число от 1 до ${pending.maxQuantity}.`,
+      keyboard: createCustomPlantKeyboard(
+        crop,
+        pending.plotNumber
+      )
+    });
+
+    return true;
+  }
+
+  pendingPlantings.delete(vkId);
+
+  return plantCrop(
+    context,
+    crop.key,
+    pending.plotNumber,
+    quantity
+  );
+}
+
+async function plantCrop(
+  context,
+  cropKey,
+  plotNumber,
+  quantityValue = 1
+) {
+  const vkId = Number(context.senderId);
+  const crop = getCrop(cropKey);
+  const state = getFarmState(vkId);
+  const safePlotNumber = Number(plotNumber);
+  const seedQuantity = Number(quantityValue);
 
   if (!crop) {
     return sendPlots(context);
@@ -1187,6 +1381,39 @@ async function plantCrop(
     );
   }
 
+  const seedCount = getSeedCount(
+    state,
+    crop.key
+  );
+
+  if (
+    !Number.isInteger(seedQuantity) ||
+    seedQuantity < 1 ||
+    seedQuantity > crop.maxSeedsPerPlot
+  ) {
+    return requestCustomPlantQuantity(
+      context,
+      crop.key,
+      safePlotNumber
+    );
+  }
+
+  if (seedCount < seedQuantity) {
+    await context.send({
+      message:
+        '❌ Не хватает семян для такой посадки.\n\n' +
+        `🌱 Нужно: ${seedQuantity}\n` +
+        `🎒 В запасе: ${seedCount}`,
+      keyboard: createCropCardKeyboard(
+        crop,
+        safePlotNumber,
+        seedCount
+      )
+    });
+
+    return true;
+  }
+
   const chances = getCropChances(
     crop,
     state.irrigationLevel
@@ -1195,24 +1422,46 @@ async function plantCrop(
     crop,
     state.soilLevel
   );
-  const currentTime = Date.now();
-  const germinated =
-    crypto.randomInt(1, 101) <=
-    chances.germination;
-  const matured = germinated &&
-    crypto.randomInt(1, 101) <=
-    chances.growth;
-  const resultCode = !germinated
-    ? 'not_sprouted'
-    : matured
-      ? 'success'
-      : 'withered';
-  const yieldAmount = matured
-    ? crypto.randomInt(
+  let germinatedCount = 0;
+  let maturedCount = 0;
+  let yieldAmount = 0;
+
+  for (
+    let seed = 0;
+    seed < seedQuantity;
+    seed += 1
+  ) {
+    const germinated =
+      crypto.randomInt(1, 101) <=
+      chances.germination;
+
+    if (!germinated) {
+      continue;
+    }
+
+    germinatedCount += 1;
+
+    const matured =
+      crypto.randomInt(1, 101) <=
+      chances.growth;
+
+    if (!matured) {
+      continue;
+    }
+
+    maturedCount += 1;
+    yieldAmount += crypto.randomInt(
       yieldRange.min,
       yieldRange.max + 1
-    )
-    : 0;
+    );
+  }
+
+  const resultCode = maturedCount > 0
+    ? 'success'
+    : germinatedCount > 0
+      ? 'withered'
+      : 'not_sprouted';
+  const currentTime = Date.now();
   const growTime = getCropGrowTime(
     crop,
     state.irrigationLevel
@@ -1221,6 +1470,7 @@ async function plantCrop(
     vkId,
     plotNumber: safePlotNumber,
     cropKey: crop.key,
+    seedQuantity,
     requiredPlots: crop.requiredPlots,
     currentTime,
     readyAt: currentTime + growTime,
@@ -1237,14 +1487,14 @@ async function plantCrop(
       keyboard: createCropCardKeyboard(
         crop,
         safePlotNumber,
-        getSeedCount(state, crop.key)
+        seedCount
       )
     });
 
     return true;
   }
 
-  if (result.status === 'no_seeds') {
+  if (result.status === 'insufficient_seeds') {
     return openCrop(
       context,
       crop.key,
@@ -1271,10 +1521,11 @@ async function plantCrop(
       '🌱 Посадка завершена!\n\n' +
       `🗺 Участок: №${safePlotNumber}\n` +
       `${crop.emoji} Культура: ${crop.title}\n` +
+      `🌾 Посажено семян: ${result.seedQuantity}\n` +
       `⏳ КД до сбора: ${formatDuration(growTime)}\n` +
-      `🎯 Шанс урожая: ${chances.total}%\n` +
+      `🎯 Шанс каждого семени: ${chances.total}%\n` +
       `🎒 Осталось семян: ${result.seedCount}\n\n` +
-      'Результат станет известен только во время сбора.',
+      'Каждое семя рассчитывается отдельно. Результат станет известен во время сбора.',
     keyboard: createGrowingPlotKeyboard(
       safePlotNumber,
       false
@@ -1344,13 +1595,14 @@ async function harvestCrop(
   if (result.status === 'failed') {
     const reason = result.resultCode ===
       'not_sprouted'
-      ? 'Семя не взошло.'
-      : 'Растение взошло, но не смогло созреть.';
+      ? 'Ни одно семя не взошло.'
+      : 'Часть семян взошла, но урожай не смог созреть.';
 
     await context.send({
       message:
         '😔 Урожая нет.\n\n' +
         `${crop?.emoji ?? '🌱'} ${crop?.title ?? result.cropKey}\n` +
+        `🌱 Было посажено семян: ${result.seedQuantity}\n` +
         `❌ ${reason}\n\n` +
         'Улучшай систему полива, чтобы повысить оба шанса.',
       keyboard: createHarvestResultKeyboard(
@@ -1365,6 +1617,7 @@ async function harvestCrop(
     message:
       '🧺 Урожай собран!\n\n' +
       `${crop?.emoji ?? '🌾'} ${crop?.title ?? result.cropKey}: +${result.quantity} ед.\n` +
+      `🌱 Было посажено семян: ${result.seedQuantity}\n` +
       `📦 Склад: ${result.storageUsed}/${capacity}\n` +
       `💰 Оценка урожая: ${formatMoney(result.quantity * (crop?.sellPrice ?? 0))} ₽\n\n` +
       'Урожай помещён на склад. Продать его можно там.',
@@ -1418,7 +1671,7 @@ async function sendSeedShop(
       '🛒 Магазин семян\n\n' +
       `📄 Страница ${page + 1}/${totalPages}\n\n` +
       `${lines.join('\n\n')}\n\n` +
-      'Семена расходуются по одному на каждую посадку.',
+      'На один участок можно посадить целую партию. Лимит зависит от культуры.',
     keyboard: createSeedShopKeyboard(
       CROPS,
       page
@@ -1454,8 +1707,9 @@ async function openSeed(context, cropKey) {
       `🌱 Цена 1 семени: ${formatMoney(crop.seedPrice)} ₽\n` +
       `🎁 Набор из 10: ${formatMoney(crop.seedPrice * 10)} ₽\n` +
       `💰 Продажа урожая: ${formatMoney(crop.sellPrice)} ₽/ед.\n` +
-      `🧺 Урожайность: ${yieldRange.min}–${yieldRange.max} ед.\n` +
-      `💵 Возможная выручка: ${formatMoney(yieldRange.min * crop.sellPrice)}–${formatMoney(yieldRange.max * crop.sellPrice)} ₽\n` +
+      `🧺 С одного семени: ${yieldRange.min}–${yieldRange.max} ед.\n` +
+      `💵 Выручка с одного: ${formatMoney(yieldRange.min * crop.sellPrice)}–${formatMoney(yieldRange.max * crop.sellPrice)} ₽\n` +
+      `🌾 Лимит участка: ${crop.maxSeedsPerPlot} семян\n` +
       `🎯 Итоговый шанс: ${chances.total}%\n` +
       `⏳ Рост: ${formatDuration(getCropGrowTime(crop, state.irrigationLevel))}\n` +
       `🎒 Уже куплено: ${getSeedCount(state, crop.key)}\n\n` +
@@ -1487,6 +1741,7 @@ async function requestCustomSeedQuantity(
     return openSeed(context, crop.key);
   }
 
+  pendingPlantings.delete(vkId);
   pendingSeedPurchases.set(vkId, {
     cropKey: crop.key,
     expiresAt:
@@ -1859,6 +2114,27 @@ async function handle(context) {
 
   if (
     payload?.command ===
+    'farm_plant_custom_cancel'
+  ) {
+    pendingPlantings.delete(vkId);
+
+    return openCrop(
+      context,
+      payload.cropKey,
+      payload.plotNumber
+    );
+  }
+
+  if (payload?.command === 'farm_plant_custom') {
+    return requestCustomPlantQuantity(
+      context,
+      payload.cropKey,
+      payload.plotNumber
+    );
+  }
+
+  if (
+    payload?.command ===
     'farm_seed_custom_cancel'
   ) {
     pendingSeedPurchases.delete(vkId);
@@ -1876,13 +2152,38 @@ async function handle(context) {
     );
   }
 
-  const pending =
+  const pendingPlant =
+    pendingPlantings.get(vkId);
+
+  if (pendingPlant) {
+    if (payload) {
+      pendingPlantings.delete(vkId);
+    } else if (
+      pendingPlant.expiresAt <= Date.now()
+    ) {
+      pendingPlantings.delete(vkId);
+    } else if (originalText) {
+      if (originalText.startsWith('!')) {
+        pendingPlantings.delete(vkId);
+      } else {
+        return handleCustomPlantInput(
+          context,
+          pendingPlant,
+          originalText
+        );
+      }
+    }
+  }
+
+  const pendingSeed =
     pendingSeedPurchases.get(vkId);
 
-  if (pending) {
+  if (pendingSeed) {
     if (payload) {
       pendingSeedPurchases.delete(vkId);
-    } else if (pending.expiresAt <= Date.now()) {
+    } else if (
+      pendingSeed.expiresAt <= Date.now()
+    ) {
       pendingSeedPurchases.delete(vkId);
     } else if (!payload && originalText) {
       if (originalText.startsWith('!')) {
@@ -1890,7 +2191,7 @@ async function handle(context) {
       } else {
         return handleCustomSeedInput(
           context,
-          pending,
+          pendingSeed,
           originalText
         );
       }
@@ -1936,7 +2237,8 @@ async function handle(context) {
     return plantCrop(
       context,
       payload.cropKey,
-      payload.plotNumber
+      payload.plotNumber,
+      payload.quantity
     );
   }
 
