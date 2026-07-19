@@ -502,6 +502,7 @@ async function initializeDatabase() {
       vk_id INTEGER NOT NULL,
       plot_number INTEGER NOT NULL,
       crop_key TEXT NOT NULL,
+      seed_quantity INTEGER NOT NULL DEFAULT 1,
       planted_at INTEGER NOT NULL,
       ready_at INTEGER NOT NULL,
       result_code TEXT NOT NULL,
@@ -514,6 +515,7 @@ async function initializeDatabase() {
       ),
 
       CHECK (plot_number >= 1),
+      CHECK (seed_quantity >= 1),
       CHECK (ready_at >= planted_at),
       CHECK (
         result_code IN (
@@ -530,6 +532,7 @@ async function initializeDatabase() {
     PRAGMA table_info(farm_plots)
   `);
   let hasFarmPlotNotifiedAt = false;
+  let hasFarmPlotSeedQuantity = false;
 
   while (farmPlotColumns.step()) {
     const column =
@@ -537,7 +540,10 @@ async function initializeDatabase() {
 
     if (column.name === 'notified_at') {
       hasFarmPlotNotifiedAt = true;
-      break;
+    }
+
+    if (column.name === 'seed_quantity') {
+      hasFarmPlotSeedQuantity = true;
     }
   }
 
@@ -547,6 +553,13 @@ async function initializeDatabase() {
     db.run(`
       ALTER TABLE farm_plots
       ADD COLUMN notified_at INTEGER NOT NULL DEFAULT 0;
+    `);
+  }
+
+  if (!hasFarmPlotSeedQuantity) {
+    db.run(`
+      ALTER TABLE farm_plots
+      ADD COLUMN seed_quantity INTEGER NOT NULL DEFAULT 1;
     `);
   }
 
@@ -6672,6 +6685,7 @@ function getFarmState(vkId) {
     SELECT
       plot_number,
       crop_key,
+      seed_quantity,
       planted_at,
       ready_at,
       result_code,
@@ -6690,6 +6704,8 @@ function getFarmState(vkId) {
     plots.push({
       plotNumber: Number(row.plot_number),
       cropKey: String(row.crop_key),
+      seedQuantity:
+        Number(row.seed_quantity) || 1,
       plantedAt: Number(row.planted_at),
       readyAt: Number(row.ready_at),
       resultCode: String(row.result_code),
@@ -6764,6 +6780,7 @@ function getPendingFarmNotifications() {
       vk_id,
       plot_number,
       crop_key,
+      seed_quantity,
       ready_at
     FROM farm_plots
     WHERE notified_at = 0
@@ -6778,6 +6795,8 @@ function getPendingFarmNotifications() {
       vkId: Number(row.vk_id),
       plotNumber: Number(row.plot_number),
       cropKey: String(row.crop_key),
+      seedQuantity:
+        Number(row.seed_quantity) || 1,
       readyAt: Number(row.ready_at)
     });
   }
@@ -6813,6 +6832,7 @@ function claimFarmHarvestNotification({
   const statement = db.prepare(`
     SELECT
       crop_key,
+      seed_quantity,
       ready_at,
       notified_at
     FROM farm_plots
@@ -6832,6 +6852,8 @@ function claimFarmHarvestNotification({
 
     plot = {
       cropKey: String(row.crop_key),
+      seedQuantity:
+        Number(row.seed_quantity) || 1,
       readyAt: Number(row.ready_at),
       notifiedAt:
         Number(row.notified_at) || 0
@@ -6880,6 +6902,7 @@ function claimFarmHarvestNotification({
     vkId: safeVkId,
     plotNumber: safePlotNumber,
     cropKey: plot.cropKey,
+    seedQuantity: plot.seedQuantity,
     readyAt: plot.readyAt,
     notifiedAt:
       Math.max(1, safeCurrentTime)
@@ -7112,6 +7135,7 @@ function plantFarmCrop({
   vkId,
   plotNumber,
   cropKey,
+  seedQuantity = 1,
   requiredPlots,
   currentTime = Date.now(),
   readyAt,
@@ -7125,6 +7149,8 @@ function plantFarmCrop({
   const safePlotNumber = Number(plotNumber);
   const safeCropKey =
     String(cropKey ?? '').trim();
+  const safeSeedQuantity =
+    Number(seedQuantity);
   const safeRequiredPlots = Number(requiredPlots);
   const safeCurrentTime = Number(currentTime);
   const safeReadyAt = Number(readyAt);
@@ -7138,6 +7164,9 @@ function plantFarmCrop({
     safePlotNumber < 1 ||
     safePlotNumber > FARM_MAX_PLOTS ||
     !safeCropKey ||
+    !Number.isInteger(safeSeedQuantity) ||
+    safeSeedQuantity < 1 ||
+    safeSeedQuantity > 1000 ||
     !Number.isInteger(safeRequiredPlots) ||
     safeRequiredPlots < 1 ||
     safeRequiredPlots > FARM_MAX_PLOTS ||
@@ -7205,8 +7234,12 @@ function plantFarmCrop({
       seed.cropKey === safeCropKey
     )?.quantity ?? 0;
 
-  if (seedCount <= 0) {
-    return { status: 'no_seeds' };
+  if (seedCount < safeSeedQuantity) {
+    return {
+      status: 'insufficient_seeds',
+      seedCount,
+      requestedQuantity: safeSeedQuantity
+    };
   }
 
   try {
@@ -7215,11 +7248,15 @@ function plantFarmCrop({
     db.run(
       `
         UPDATE farm_seeds
-        SET quantity = quantity - 1
+        SET quantity = quantity - ?
         WHERE vk_id = ?
           AND crop_key = ?
       `,
-      [safeVkId, safeCropKey]
+      [
+        safeSeedQuantity,
+        safeVkId,
+        safeCropKey
+      ]
     );
 
     db.run(
@@ -7238,17 +7275,19 @@ function plantFarmCrop({
           vk_id,
           plot_number,
           crop_key,
+          seed_quantity,
           planted_at,
           ready_at,
           result_code,
           yield_amount
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         safeVkId,
         safePlotNumber,
         safeCropKey,
+        safeSeedQuantity,
         safeCurrentTime,
         safeReadyAt,
         safeResultCode,
@@ -7275,8 +7314,10 @@ function plantFarmCrop({
       status: 'planted',
       plotNumber: safePlotNumber,
       cropKey: safeCropKey,
+      seedQuantity: safeSeedQuantity,
       readyAt: safeReadyAt,
-      seedCount: seedCount - 1
+      seedCount:
+        seedCount - safeSeedQuantity
     };
   } catch (error) {
     try {
@@ -7424,6 +7465,7 @@ function harvestFarmCrop({
         : 'failed',
       resultCode: plot.resultCode,
       cropKey: plot.cropKey,
+      seedQuantity: plot.seedQuantity,
       quantity: plot.yieldAmount,
       storageUsed:
         state.storageUsed +
