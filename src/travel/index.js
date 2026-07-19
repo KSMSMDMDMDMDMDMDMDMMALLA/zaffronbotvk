@@ -210,9 +210,9 @@ async function sendTravelHome(
       `🏠 Текущая страна: ${currentCountry.flag} ${currentCountry.title}\n` +
       `✈ Самолёт: ${plane?.title ?? 'отсутствует'}\n` +
       `🗺 Исследовано: ${researched.size}/${countries.length}\n` +
-      `💵 Баланс: ${formatMoney(getBalance(vkId))} $\n\n` +
-      `🔍 Исследование страны: ${formatMoney(RESEARCH_COST)} $\n` +
-      `🚚 Переезд: ${formatMoney(MOVE_COST)} $\n\n` +
+      `💵 Баланс: ${formatMoney(getBalance(vkId))} ₽\n\n` +
+      `🔍 Исследование страны: ${formatMoney(RESEARCH_COST)} ₽\n` +
+      `🚚 Переезд: ${formatMoney(MOVE_COST)} ₽\n\n` +
       `${lines.join('\n\n')}\n\n` +
       `Страница ${page + 1}/${totalPages}\n\n` +
       'Команды:\n' +
@@ -270,8 +270,8 @@ async function sendResearchPrompt(
       '🔍 Исследование страны\n\n' +
       `${country.flag} Страна: ${country.title}\n` +
       `✈ Самолёт: ${getBestPlane(vkId).title}\n` +
-      `💵 Стоимость: ${formatMoney(RESEARCH_COST)} $\n` +
-      `🏦 Баланс: ${formatMoney(getBalance(vkId))} $\n\n` +
+      `💵 Стоимость: ${formatMoney(RESEARCH_COST)} ₽\n` +
+      `🏦 Баланс: ${formatMoney(getBalance(vkId))} ₽\n\n` +
       'После исследования страна навсегда останется доступной для переезда.',
     keyboard: createConfirmationKeyboard(
       'research',
@@ -326,8 +326,8 @@ async function sendMovePrompt(
       `📍 Откуда: ${currentCountry.flag} ${currentCountry.title}\n` +
       `🏁 Куда: ${country.flag} ${country.title}\n` +
       `✈ Самолёт: ${getBestPlane(vkId).title}\n` +
-      `💵 Стоимость: ${formatMoney(MOVE_COST)} $\n` +
-      `🏦 Баланс: ${formatMoney(getBalance(vkId))} $`,
+      `💵 Стоимость: ${formatMoney(MOVE_COST)} ₽\n` +
+      `🏦 Баланс: ${formatMoney(getBalance(vkId))} ₽`,
     keyboard: createConfirmationKeyboard(
       'move',
       country,
@@ -361,9 +361,9 @@ async function confirmResearch(
     await context.send({
       message:
         '❌ Недостаточно денег для исследования.\n\n' +
-        `💵 Нужно: ${formatMoney(result.cost)} $\n` +
-        `🏦 Баланс: ${formatMoney(result.balance)} $\n` +
-        `📉 Не хватает: ${formatMoney(result.missing)} $`,
+        `💵 Нужно: ${formatMoney(result.cost)} ₽\n` +
+        `🏦 Баланс: ${formatMoney(result.balance)} ₽\n` +
+        `📉 Не хватает: ${formatMoney(result.missing)} ₽`,
       keyboard: createReturnKeyboard(page)
     });
 
@@ -374,8 +374,8 @@ async function confirmResearch(
     message:
       '🎉 Страна исследована!\n\n' +
       `${country.flag} ${country.title}\n` +
-      `💸 Потрачено: ${formatMoney(result.cost)} $\n` +
-      `🏦 Баланс: ${formatMoney(result.balance)} $\n\n` +
+      `💸 Потрачено: ${formatMoney(result.cost)} ₽\n` +
+      `🏦 Баланс: ${formatMoney(result.balance)} ₽\n\n` +
       `Теперь сюда можно переехать командой:\n!переезд ${country.title}`,
     keyboard: createReturnKeyboard(page)
   });
@@ -422,9 +422,9 @@ async function confirmMove(
     await context.send({
       message:
         '❌ Недостаточно денег для переезда.\n\n' +
-        `💵 Нужно: ${formatMoney(result.cost)} $\n` +
-        `🏦 Баланс: ${formatMoney(result.balance)} $\n` +
-        `📉 Не хватает: ${formatMoney(result.missing)} $`,
+        `💵 Нужно: ${formatMoney(result.cost)} ₽\n` +
+        `🏦 Баланс: ${formatMoney(result.balance)} ₽\n` +
+        `📉 Не хватает: ${formatMoney(result.missing)} ₽`,
       keyboard: createReturnKeyboard(page)
     });
 
@@ -435,8 +435,8 @@ async function confirmMove(
     message:
       '🎉 Переезд завершён!\n\n' +
       `🏠 Новая страна проживания: ${country.flag} ${country.title}\n` +
-      `💸 Потрачено: ${formatMoney(result.cost)} $\n` +
-      `🏦 Баланс: ${formatMoney(result.balance)} $`,
+      `💸 Потрачено: ${formatMoney(result.cost)} ₽\n` +
+      `🏦 Баланс: ${formatMoney(result.balance)} ₽`,
     keyboard: createReturnKeyboard(page)
   });
 

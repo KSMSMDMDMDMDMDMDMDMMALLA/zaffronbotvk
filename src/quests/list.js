@@ -32,7 +32,7 @@ module.exports = Object.freeze([
       experience: 1,
       dollars: 5000
     },
-    rewardText: '1 EXP + 5.000 $'
+    rewardText: '1 EXP + 5.000 ₽'
   },
   {
     key: 'casino-play-50',
@@ -47,7 +47,7 @@ module.exports = Object.freeze([
       experience: 3,
       dollars: 15000
     },
-    rewardText: '3 EXP + 15.000 $'
+    rewardText: '3 EXP + 15.000 ₽'
   },
   {
     key: 'reach-level-10',
@@ -107,7 +107,7 @@ module.exports = Object.freeze([
     rewards: {
       dollars: 100000
     },
-    rewardText: '100.000 $'
+    rewardText: '100.000 ₽'
   },
   {
     key: 'buy-first-business',
@@ -122,7 +122,7 @@ module.exports = Object.freeze([
       experience: 5,
       dollars: 77000
     },
-    rewardText: '5 EXP + 77.000 $'
+    rewardText: '5 EXP + 77.000 ₽'
   },
   {
     key: 'receive-aura-5',
@@ -151,18 +151,18 @@ module.exports = Object.freeze([
     rewards: {
       dollars: 2000000
     },
-    rewardText: '2.000.000 $'
+    rewardText: '2.000.000 ₽'
   },
   {
     key: 'reach-balance-100k',
-    title: 'Достигнуть баланса 100.000 $',
+    title: 'Достигнуть баланса 100.000 ₽',
     description:
-      'Иметь на руках хотя бы 100.000 $.',
+      'Иметь на руках хотя бы 100.000 ₽.',
     condition: {
       type: 'stat',
       key: 'balance_peak',
       target: 100000,
-      unit: '$'
+      unit: '₽'
     },
     rewards: {
       experience: 10
@@ -171,19 +171,19 @@ module.exports = Object.freeze([
   },
   {
     key: 'reach-balance-1m',
-    title: 'Достигнуть баланса 1.000.000 $',
+    title: 'Достигнуть баланса 1.000.000 ₽',
     description:
-      'Иметь на руках хотя бы 1.000.000 $.',
+      'Иметь на руках хотя бы 1.000.000 ₽.',
     condition: {
       type: 'stat',
       key: 'balance_peak',
       target: 1000000,
-      unit: '$'
+      unit: '₽'
     },
     rewards: {
       dollars: 500000
     },
-    rewardText: '500.000 $'
+    rewardText: '500.000 ₽'
   },
   {
     key: 'give-first-aura',
@@ -214,7 +214,7 @@ module.exports = Object.freeze([
       aura: 5,
       dollars: 50000
     },
-    rewardText: '5 ауры + 50.000 $'
+    rewardText: '5 ауры + 50.000 ₽'
   },
   {
     key: 'guess-win-5',
@@ -229,7 +229,7 @@ module.exports = Object.freeze([
     rewards: {
       dollars: 150000
     },
-    rewardText: '150.000 $'
+    rewardText: '150.000 ₽'
   },
   {
     key: 'view-profile-100',
@@ -244,7 +244,7 @@ module.exports = Object.freeze([
     rewards: {
       dollars: 35000
     },
-    rewardText: '35.000 $'
+    rewardText: '35.000 ₽'
   },
   {
     key: 'play-potato-10',
@@ -274,7 +274,7 @@ module.exports = Object.freeze([
     rewards: {
       dollars: 100000
     },
-    rewardText: '100.000 $'
+    rewardText: '100.000 ₽'
   },
   {
     key: 'complete-first-fishing',
@@ -290,6 +290,6 @@ module.exports = Object.freeze([
       experience: 2,
       dollars: 25000
     },
-    rewardText: '2 EXP + 25.000 $'
+    rewardText: '2 EXP + 25.000 ₽'
   }
 ]);

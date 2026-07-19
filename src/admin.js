@@ -29,12 +29,12 @@ const {
  * \set @username 100
  * \reset @username
  * \info @username
- * \add$ @username 100
- * \minus$ @username 100
- * \set$ @username 500
- * \reset$ @username
+ * \add₽ @username 100
+ * \minus₽ @username 100
+ * \set₽ @username 500
+ * \reset₽ @username
  * \addpromo SUMMER aura 50
- * \addpromo MONEY $ 1000
+ * \addpromo MONEY ₽ 1000
  * \users
  * \sms Текст рассылки
  */
@@ -235,7 +235,7 @@ function normalizePromoRewardType(value) {
     return 'aura';
   }
 
-  if (type === '$') {
+  if (type === '$' || type === '₽') {
     return 'dollars';
   }
 
@@ -733,7 +733,7 @@ async function handleAddBalance(
       '❌ Укажи целое количество от 1 до ' +
       `${MAX_BALANCE_AMOUNT}.\n\n` +
       'Пример:\n' +
-      '\\add$ @username 1000'
+      '\\add₽ @username 1000'
     );
 
     return true;
@@ -760,8 +760,8 @@ async function handleAddBalance(
   await context.send(
     '✅ Деньги выданы.\n\n' +
     `👤 @id${user.id} (${getUserName(user)})\n` +
-    `💵 Начислено: +${formatMoney(amount)} $\n` +
-    `🏦 Баланс: ${formatMoney(balance)} $`
+    `💵 Начислено: +${formatMoney(amount)} ₽\n` +
+    `🏦 Баланс: ${formatMoney(balance)} ₽`
   );
 
   return true;
@@ -787,7 +787,7 @@ async function handleMinusBalance(
       '❌ Укажи целое количество от 1 до ' +
       `${MAX_BALANCE_AMOUNT}.\n\n` +
       'Пример:\n' +
-      '\\minus$ @username 1000'
+      '\\minus₽ @username 1000'
     );
 
     return true;
@@ -814,9 +814,9 @@ async function handleMinusBalance(
   await context.send(
     '✅ Деньги списаны.\n\n' +
     `👤 @id${user.id} (${getUserName(user)})\n` +
-    `➖ Запрошено: ${formatMoney(amount)} $\n` +
-    `💵 Списано: ${formatMoney(result.removed)} $\n` +
-    `🏦 Баланс: ${formatMoney(result.balance)} $`
+    `➖ Запрошено: ${formatMoney(amount)} ₽\n` +
+    `💵 Списано: ${formatMoney(result.removed)} ₽\n` +
+    `🏦 Баланс: ${formatMoney(result.balance)} ₽`
   );
 
   return true;
@@ -842,7 +842,7 @@ async function handleSetBalance(
       '❌ Укажи целое количество от 0 до ' +
       `${MAX_BALANCE_AMOUNT}.\n\n` +
       'Пример:\n' +
-      '\\set$ @username 5000'
+      '\\set₽ @username 5000'
     );
 
     return true;
@@ -869,7 +869,7 @@ async function handleSetBalance(
   await context.send(
     '✅ Баланс установлен.\n\n' +
     `👤 @id${user.id} (${getUserName(user)})\n` +
-    `🏦 Баланс: ${formatMoney(balance)} $`
+    `🏦 Баланс: ${formatMoney(balance)} ₽`
   );
 
   return true;
@@ -902,7 +902,7 @@ async function handleResetBalance(
   await context.send(
     '✅ Баланс обнулён.\n\n' +
     `👤 @id${user.id} (${getUserName(user)})\n` +
-    '🏦 Баланс: 0 $'
+    '🏦 Баланс: 0 ₽'
   );
 
   return true;
@@ -936,7 +936,7 @@ async function handleAddPromo(
       '❌ Неверный формат промокода.\n\n' +
       'Примеры:\n' +
       '\\addpromo SUMMER aura 50\n' +
-      '\\addpromo MONEY $ 1000\n\n' +
+      '\\addpromo MONEY ₽ 1000\n\n' +
       'Название: до 32 букв или цифр; ' +
       'также можно использовать _ и -.'
     );
@@ -962,7 +962,7 @@ async function handleAddPromo(
   const rewardText =
     rewardType === 'aura'
       ? `${amount} ауры`
-      : `${formatMoney(amount)} $`;
+      : `${formatMoney(amount)} ₽`;
 
   await context.send(
     '✅ Промокод создан.\n\n' +
@@ -1047,8 +1047,8 @@ async function handleInfo(
     `🎂 Дата рождения: ${user.bdate || 'Не указана'}\n` +
     `🟢 Сейчас онлайн: ${user.online ? 'Да' : 'Нет'}\n\n` +
     `✨ Общая аура: ${totalAura}\n` +
-    `💵 Баланс: ${formatMoney(balance)} $\n` +
-    `🥔 Долг в играх: ${formatMoney(gameDebt)} $\n` +
+    `💵 Баланс: ${formatMoney(balance)} ₽\n` +
+    `🥔 Долг в играх: ${formatMoney(gameDebt)} ₽\n` +
     `⭐ Уровень: ${jobProfile.level}` +
     `${jobProfile.level >= JOB_MAX_LEVEL ? ' (максимальный)' : ''}\n` +
     `${jobExperienceText}\n` +
@@ -1094,7 +1094,7 @@ async function handle(
 
     match =
       originalText.match(
-        /^\\addpromo\s+("[^"]+"|'[^']+'|\S+)\s+(aura|аура|\$)\s+(\d+)$/i
+        /^\\addpromo\s+("[^"]+"|'[^']+'|\S+)\s+(aura|аура|[$₽])\s+(\d+)$/i
       );
 
     if (match) {
@@ -1108,7 +1108,7 @@ async function handle(
 
     match =
       originalText.match(
-        /^\\add\$\s+(\S+)\s+(\d+)$/i
+        /^\\add[$₽]\s+(\S+)\s+(\d+)$/i
       );
 
     if (match) {
@@ -1122,7 +1122,7 @@ async function handle(
 
     match =
       originalText.match(
-        /^\\minus\$\s+(\S+)\s+(\d+)$/i
+        /^\\minus[$₽]\s+(\S+)\s+(\d+)$/i
       );
 
     if (match) {
@@ -1136,7 +1136,7 @@ async function handle(
 
     match =
       originalText.match(
-        /^\\set\$\s+(\S+)\s+(\d+)$/i
+        /^\\set[$₽]\s+(\S+)\s+(\d+)$/i
       );
 
     if (match) {
@@ -1150,7 +1150,7 @@ async function handle(
 
     match =
       originalText.match(
-        /^\\reset\$\s+(\S+)$/i
+        /^\\reset[$₽]\s+(\S+)$/i
       );
 
     if (match) {
@@ -1230,7 +1230,7 @@ async function handle(
     }
 
     if (
-      /^\\(?:users|sms|addpromo|add\$|minus\$|set\$|reset\$|add|minus|set|reset|info)(?:\s|$)/i
+      /^\\(?:users|sms|addpromo|add[$₽]|minus[$₽]|set[$₽]|reset[$₽]|add|minus|set|reset|info)(?:\s|$)/i
         .test(originalText)
     ) {
       if (!await requireAdmin(context)) {
@@ -1244,12 +1244,12 @@ async function handle(
         '\\set @username 500\n' +
         '\\reset @username\n' +
         '\\info @username\n\n' +
-        '\\add$ @username 1000\n' +
-        '\\minus$ @username 1000\n' +
-        '\\set$ @username 5000\n' +
-        '\\reset$ @username\n\n' +
+        '\\add₽ @username 1000\n' +
+        '\\minus₽ @username 1000\n' +
+        '\\set₽ @username 5000\n' +
+        '\\reset₽ @username\n\n' +
         '\\addpromo SUMMER aura 50\n' +
-        '\\addpromo MONEY $ 1000\n\n' +
+        '\\addpromo MONEY ₽ 1000\n\n' +
         '\\users\n' +
         '\\sms Текст рассылки'
       );

@@ -195,30 +195,30 @@ function formatRemainingTime(milliseconds) {
 
 function formatGamePenalty(result) {
   const lines = [
-    `💸 Штраф: -${formatMoney(result.penalty)} $`
+    `💸 Штраф: -${formatMoney(result.penalty)} ₽`
   ];
 
   if (result.paid > 0) {
     lines.push(
-      `💵 Списано с баланса: ${formatMoney(result.paid)} $`
+      `💵 Списано с баланса: ${formatMoney(result.paid)} ₽`
     );
   }
 
   if (result.debtAdded > 0) {
     lines.push(
-      `💳 Добавлено в долг: ${formatMoney(result.debtAdded)} $`
+      `💳 Добавлено в долг: ${formatMoney(result.debtAdded)} ₽`
     );
   }
 
   if (result.uncollected > 0) {
     lines.push(
-      `🛡 Долг достиг лимита ${formatMoney(result.debtLimit)} $`
+      `🛡 Долг достиг лимита ${formatMoney(result.debtLimit)} ₽`
     );
   }
 
   lines.push(
-    `🥔 Долг в играх: ${formatMoney(result.debt)} $`,
-    `💵 Баланс игрока: ${formatMoney(result.balance)} $`
+    `🥔 Долг в играх: ${formatMoney(result.debt)} ₽`,
+    `💵 Баланс игрока: ${formatMoney(result.balance)} ₽`
   );
 
   return lines.join('\n');
@@ -229,22 +229,22 @@ function formatGameReward(result) {
 
   if (result.debtPaid > 0) {
     lines.push(
-      `💳 Погашено долга: ${formatMoney(result.debtPaid)} $`
+      `💳 Погашено долга: ${formatMoney(result.debtPaid)} ₽`
     );
 
     lines.push(
-      `💵 Зачислено на баланс: ${formatMoney(result.credited)} $`
+      `💵 Зачислено на баланс: ${formatMoney(result.credited)} ₽`
     );
   }
 
   if (result.debt > 0) {
     lines.push(
-      `🥔 Долг в играх: ${formatMoney(result.debt)} $`
+      `🥔 Долг в играх: ${formatMoney(result.debt)} ₽`
     );
   }
 
   lines.push(
-    `💵 Баланс игрока: ${formatMoney(result.balance)} $`
+    `💵 Баланс игрока: ${formatMoney(result.balance)} ₽`
   );
 
   return lines.join('\n');
@@ -831,7 +831,7 @@ async function cutBombWire(
 
     await context.send(
       '🎉 Бомба обезврежена!\n\n' +
-      `@id${userId} получает +3 $.\n` +
+      `@id${userId} получает +3 ₽.\n` +
       formatGameReward(rewardResult)
     );
 
@@ -1020,7 +1020,7 @@ async function catchReaction(
 
   await context.send(
     `⚡ @id${userId} оказался быстрее всех!\n\n` +
-    '💵 Награда: +2 $\n' +
+    '💵 Награда: +2 ₽\n' +
     formatGameReward(rewardResult)
   );
 
@@ -1041,7 +1041,7 @@ function getCaseDrop() {
     return {
       amount: 50,
       text:
-        '👑 ДЖЕКПОТ! Выпало +50 $!'
+        '👑 ДЖЕКПОТ! Выпало +50 ₽!'
     };
   }
 
@@ -1049,7 +1049,7 @@ function getCaseDrop() {
     return {
       amount: 10,
       text:
-        '💎 Редкий приз: +10 $!'
+        '💎 Редкий приз: +10 ₽!'
     };
   }
 
@@ -1057,7 +1057,7 @@ function getCaseDrop() {
     return {
       amount: 5,
       text:
-        '💵 Выпало +5 $!'
+        '💵 Выпало +5 ₽!'
     };
   }
 
@@ -1065,7 +1065,7 @@ function getCaseDrop() {
     return {
       amount: 2,
       text:
-        '🙂 Выпало +2 $.'
+        '🙂 Выпало +2 ₽.'
     };
   }
 
@@ -1073,7 +1073,7 @@ function getCaseDrop() {
     return {
       amount: -2,
       text:
-        '💀 Не повезло: -2 $.'
+        '💀 Не повезло: -2 ₽.'
     };
   }
 
@@ -1131,7 +1131,7 @@ async function openCase(
 
   let dropText = drop.text;
   let resultText =
-    `💵 Баланс: ${formatMoney(getBalance(userId))} $`;
+    `💵 Баланс: ${formatMoney(getBalance(userId))} ₽`;
 
   if (drop.amount > 0) {
     const rewardResult =
@@ -1193,7 +1193,7 @@ async function playCasino(
   ].includes(normalizedBet);
 
   const amountText = normalizedBet
-    .replace(/\$$/, '')
+    .replace(/[$₽]$/, '')
     .trim();
 
   const bet = isAllIn
@@ -1224,8 +1224,8 @@ async function playCasino(
   if (balance < bet) {
     await context.reply(
       '❌ Недостаточно денег.\n\n' +
-      `💵 Баланс: ${formatMoney(balance)} $\n` +
-      `🎰 Ставка: ${formatMoney(bet)} $`
+      `💵 Баланс: ${formatMoney(balance)} ₽\n` +
+      `🎰 Ставка: ${formatMoney(bet)} ₽`
     );
 
     return true;
@@ -1277,7 +1277,7 @@ async function playCasino(
     '➖ Ставка вернулась без изменений.';
 
   let settlementText =
-    `🏦 Баланс: ${formatMoney(balance)} $`;
+    `🏦 Баланс: ${formatMoney(balance)} ₽`;
 
   if (netResult > 0) {
     const rewardResult = applyGameReward(
@@ -1286,24 +1286,24 @@ async function playCasino(
     );
 
     resultTitle =
-      `📈 Чистая прибыль: +${formatMoney(netResult)} $`;
+      `📈 Чистая прибыль: +${formatMoney(netResult)} ₽`;
 
     const settlementLines = [];
 
     if (rewardResult.debtPaid > 0) {
       settlementLines.push(
-        `💳 Из выигрыша погашено долга: ${formatMoney(rewardResult.debtPaid)} $`
+        `💳 Из выигрыша погашено долга: ${formatMoney(rewardResult.debtPaid)} ₽`
       );
     }
 
     if (rewardResult.credited > 0) {
       settlementLines.push(
-        `💵 Зачислено на баланс: ${formatMoney(rewardResult.credited)} $`
+        `💵 Зачислено на баланс: ${formatMoney(rewardResult.credited)} ₽`
       );
     }
 
     settlementLines.push(
-      `🏦 Баланс: ${formatMoney(rewardResult.balance)} $`
+      `🏦 Баланс: ${formatMoney(rewardResult.balance)} ₽`
     );
 
     settlementText =
@@ -1320,17 +1320,17 @@ async function playCasino(
     );
 
     resultTitle =
-      `📉 Чистый проигрыш: -${formatMoney(Math.abs(netResult))} $`;
+      `📉 Чистый проигрыш: -${formatMoney(Math.abs(netResult))} ₽`;
 
     settlementText =
-      `🏦 Баланс: ${formatMoney(penaltyResult.balance)} $`;
+      `🏦 Баланс: ${formatMoney(penaltyResult.balance)} ₽`;
   }
 
   await context.send(
     '🎰 Казино Zaffron\n\n' +
     `🎲 Множитель: x${multiplier.toFixed(1)}\n` +
-    `💵 Ставка: ${formatMoney(bet)} $\n` +
-    `💰 Выплата: ${formatMoney(payout)} $\n` +
+    `💵 Ставка: ${formatMoney(bet)} ₽\n` +
+    `💰 Выплата: ${formatMoney(payout)} ₽\n` +
     `${resultTitle}\n\n` +
     settlementText
   );
@@ -1536,7 +1536,7 @@ async function guessNumber(
 
   await context.send(
     `🏆 @id${userId} угадал число ${game.number}!\n\n` +
-    '💵 Награда: +4 $\n' +
+    '💵 Награда: +4 ₽\n' +
     formatGameReward(rewardResult)
   );
 

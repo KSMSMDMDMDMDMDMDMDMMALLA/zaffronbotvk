@@ -646,19 +646,19 @@ async function finishDuel(
 
   if (rewardResult.debtPaid > 0) {
     rewardDetails.push(
-      `💳 Погашено долга: ${formatMoney(rewardResult.debtPaid)} $`,
-      `💵 Зачислено на баланс: ${formatMoney(rewardResult.credited)} $`
+      `💳 Погашено долга: ${formatMoney(rewardResult.debtPaid)} ₽`,
+      `💵 Зачислено на баланс: ${formatMoney(rewardResult.credited)} ₽`
     );
   }
 
   if (rewardResult.debt > 0) {
     rewardDetails.push(
-      `🥔 Долг в играх: ${formatMoney(rewardResult.debt)} $`
+      `🥔 Долг в играх: ${formatMoney(rewardResult.debt)} ₽`
     );
   }
 
   rewardDetails.push(
-    `💵 Баланс: ${formatMoney(rewardResult.balance)} $`
+    `💵 Баланс: ${formatMoney(rewardResult.balance)} ₽`
   );
 
   await sendToDuel(
@@ -672,7 +672,7 @@ async function finishDuel(
         `@id${duel.opponentId} (${opponentName}) — ` +
         `${duel.scores.opponent}\n\n` +
         `👑 Победитель: @id${winnerId} (${winnerName})\n` +
-        `💵 Награда: +${formatMoney(WINNER_DOLLAR_REWARD)} $\n` +
+        `💵 Награда: +${formatMoney(WINNER_DOLLAR_REWARD)} ₽\n` +
         rewardDetails.join('\n')
     }
   );
@@ -904,7 +904,7 @@ async function createDuel(
     `⚔ @id${challengerId} (${challengerName}) ` +
     'вызывает тебя на мем-дуэль!\n\n' +
     `🎮 Раундов: ${TOTAL_ROUNDS}\n` +
-    `💵 Награда: ${formatMoney(WINNER_DOLLAR_REWARD)} $\n\n` +
+    `💵 Награда: ${formatMoney(WINNER_DOLLAR_REWARD)} ₽\n\n` +
     'Принять вызов?';
 
   try {

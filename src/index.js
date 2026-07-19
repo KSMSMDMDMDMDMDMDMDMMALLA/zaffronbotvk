@@ -18,6 +18,7 @@ const aura = require('./aura');
 const bank = require('./bank');
 const business = require('./business');
 const earnings = require('./earnings');
+const farm = require('./farm');
 const fishing = require('./fishing');
 const games = require('./games2');
 const jobs = require('./jobs');
@@ -29,9 +30,11 @@ const photo = require('./photo');
 const promo = require('./promo');
 const quests = require('./quests');
 const race = require('./race');
+const rental = require('./rental');
 const roleplay = require('./rp');
 const transfer = require('./transfer');
 const travel = require('./travel');
+const tuning = require('./tuning');
 const communityWidget = require('./community-widget');
 const {
   getCommandSuggestion
@@ -93,11 +96,14 @@ const commandHandlers = [
   transfer,
   roleplay,
   race,
+  tuning,
   jobs,
   earnings,
   games,
+  farm,
   bank,
   magazine,
+  rental,
   business,
   fishing,
   quests,
@@ -412,7 +418,7 @@ function getCommandsSectionText(section) {
       '💙 Основное\n\n' +
       '👤 !п — профиль\n' +
       '💵 !баланс\n' +
-      '💸 !передать — перевод\n' +
+      '💸 !передать — перевод (до 5.000.000 ₽/день)\n' +
       '🏆 !топ баланс\n' +
       '🎟 !promo — промокод\n' +
       '📋 !команды — разделы',
@@ -422,7 +428,9 @@ function getCommandsSectionText(section) {
       '🔨 !работать [работа] — начать смену\n' +
       '📦 !коробка — коробка новичка\n' +
       '🎣 !рыбачить — рыбалка\n' +
+      '🚜 !ферма — участки и урожай\n' +
       '🛒 !магазин — покупки\n' +
+      '🏘 !аренда — сдача жилья\n' +
       '🏢 !бизнес — бизнесы\n' +
       '🏦 !банк — вклад\n' +
       '🎯 !квесты — задания\n' +
@@ -441,6 +449,7 @@ function getCommandsSectionText(section) {
       '⚡ !реакция\n' +
       '🎰 !казино [ставка]\n' +
       '🏁 !гонка — вызов\n' +
+      '🔧 !тюнинг — гараж машин\n' +
       '🤗 !обнять [реплай]\n' +
       '💋 !поцеловать [реплай]\n' +
       '🫂 !погладить [реплай]\n' +
@@ -528,7 +537,7 @@ function getBusinessProfileText(vkId) {
     .filter(Boolean);
 
   if (businessItems.length === 0) {
-    return '📈 Доход бизнесов: 0 $/час';
+    return '📈 Доход бизнесов: 0 ₽/час';
   }
 
   const incomePerHour = businessItems.reduce(
@@ -550,7 +559,7 @@ function getBusinessProfileText(vkId) {
 
   return (
     `📈 Доход бизнесов: ` +
-    `${formatMoney(incomePerHour)} $/час`
+    `${formatMoney(incomePerHour)} ₽/час`
   );
 }
 
@@ -570,8 +579,8 @@ async function sendProfile(context, vk) {
     `🆔 ID: ${vkId}\n` +
     `👤 Имя: ${getUserName(user, vkId)}\n` +
     `✨ Аура: ${getTotalAura(vkId)}\n` +
-    `💵 Баланс: ${formatMoney(getBalance(vkId))} $\n` +
-    `🥔 Долг в играх: ${formatMoney(getGameDebt(vkId))} $\n\n` +
+    `💵 Баланс: ${formatMoney(getBalance(vkId))} ₽\n` +
+    `🥔 Долг в играх: ${formatMoney(getGameDebt(vkId))} ₽\n\n` +
     `⭐ Уровень: ${jobProfile.level}\n` +
     `📈 EXP: ${experienceText}\n\n` +
     `${travel.getProfileText(vkId)}\n\n` +
@@ -597,7 +606,7 @@ async function sendBalance(context) {
   );
 
   await context.send(
-    `💵 Твой баланс: ${formatMoney(balance)} $`
+    `💵 Твой баланс: ${formatMoney(balance)} ₽`
   );
 
   return true;
@@ -642,7 +651,7 @@ async function sendBalanceTop(context, vk) {
     return (
       `${position} @id${item.vkId} ` +
       `(${getUserName(user, item.vkId)}) — ` +
-      `${formatMoney(item.balance)} $`
+      `${formatMoney(item.balance)} ₽`
     );
   });
 
@@ -1209,6 +1218,7 @@ async function start() {
   const vk = createVk(token);
 
   jobs.initialize(vk);
+  farm.initialize(vk);
   communityWidget.initialize(vk);
 
   vk.updates.on(

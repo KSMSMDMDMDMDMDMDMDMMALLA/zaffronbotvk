@@ -1,3 +1,5 @@
+const { Keyboard } = require('vk-io');
+
 const janitor = require('./janitor');
 const roadWorker = require('./road-worker');
 const seller = require('./seller');
@@ -8,6 +10,7 @@ const factoryChief = require('./factory-chief');
 const airlineChief = require('./airline-chief');
 const deputy = require('./deputy');
 const primeMinister = require('./prime-minister');
+const advancedJobs = require('./advanced');
 
 const {
   formatMoney,
@@ -30,7 +33,8 @@ const jobs = [
   factoryChief,
   airlineChief,
   deputy,
-  primeMinister
+  primeMinister,
+  ...advancedJobs
 ];
 
 const jobsByKey = new Map(
@@ -66,8 +70,16 @@ function formatDuration(milliseconds) {
     Math.ceil(milliseconds / 1000)
   );
 
-  if (seconds >= 60 && seconds % 60 === 0) {
-    return `${seconds / 60} мин.`;
+  if (seconds >= 60) {
+    const minutes = Math.floor(
+      seconds / 60
+    );
+    const remainingSeconds =
+      seconds % 60;
+
+    return remainingSeconds > 0
+      ? `${minutes} мин. ${remainingSeconds} сек.`
+      : `${minutes} мин.`;
   }
 
   return `${seconds} сек.`;
@@ -130,12 +142,29 @@ function buildCompletionMessage(
     `✅ @id${activeJob.vkId} (${userName}), смена окончена!\n\n` +
     `${job.emoji} Работа: ${job.title}\n` +
     boostText +
-    `💵 Зарплата: +${formatMoney(result.salary)} $\n` +
+    `💵 Зарплата: +${formatMoney(result.salary)} ₽\n` +
     levelText +
     `${formatExperience(result.level, result.experience)} ` +
     `(+${result.experienceEarned} за смену)\n` +
-    `🏦 Баланс: ${formatMoney(result.balance)} $`
+    `🏦 Баланс: ${formatMoney(result.balance)} ₽`
   );
+}
+
+function createContinueJobKeyboard(
+  jobKey,
+  userId
+) {
+  return Keyboard.builder()
+    .textButton({
+      label: 'Продолжить работу',
+      payload: {
+        command: 'job_continue',
+        jobKey,
+        userId
+      },
+      color: Keyboard.POSITIVE_COLOR
+    })
+    .inline();
 }
 
 async function finishJob(vk, activeJob) {
@@ -183,6 +212,10 @@ async function finishJob(vk, activeJob) {
         job,
         result,
         userName
+      ),
+      keyboard: createContinueJobKeyboard(
+        job.key,
+        activeJob.vkId
       )
     });
   } catch (error) {
@@ -256,7 +289,7 @@ async function sendJobsList(context) {
       `${job.emoji} ${job.title}\n` +
       `├ Уровень: ${job.requiredLevel}\n` +
       `├ Смена: ${formatDuration(job.durationMs)}\n` +
-      `├ Зарплата: ${formatMoney(job.salary)} $\n` +
+      `├ Зарплата: ${formatMoney(job.salary)} ₽\n` +
       experienceLine +
       `└ ${access}`
     );
@@ -269,7 +302,7 @@ async function sendJobsList(context) {
     `${formatExperience(profile.level, profile.experience)}\n\n` +
     `${lines.join('\n\n')}\n\n` +
     'За каждую завершённую смену начисляется 1 EXP.\n' +
-    'После 10 уровня новые работы не открываются, но уровень продолжает расти на последней работе.\n' +
+    'Новые должности открываются вплоть до 50 уровня.\n' +
     'Максимальный уровень игрока — 50.'
   );
 
@@ -281,9 +314,11 @@ async function startJob(
   vk,
   rawJobName
 ) {
-  const job = jobsByAlias.get(
-    normalizeJobName(rawJobName)
-  );
+  const normalizedJobName =
+    normalizeJobName(rawJobName);
+  const job =
+    jobsByKey.get(normalizedJobName) ??
+    jobsByAlias.get(normalizedJobName);
 
   if (!job) {
     await context.reply(
@@ -361,7 +396,7 @@ async function startJob(
     `👷 @id${userId} (${userName}), ` +
     `ты начал работу ${job.workTitle}!\n\n` +
     `⏳ Смена закончится через ${formatDuration(job.durationMs)}\n` +
-    `💵 Зарплата: ${formatMoney(job.salary)} $\n\n` +
+    `💵 Зарплата: ${formatMoney(job.salary)} ₽\n\n` +
     'Дождись окончания смены.'
   );
 
@@ -372,6 +407,29 @@ async function handle(context, vk) {
   const originalText =
     String(context.text ?? '')
       .trim();
+  const payload = context.messagePayload;
+
+  if (payload?.command === 'job_continue') {
+    const ownerId = Number(payload.userId);
+
+    if (
+      Number.isInteger(ownerId) &&
+      ownerId > 0 &&
+      ownerId !== Number(context.senderId)
+    ) {
+      await context.reply(
+        '❌ Эта кнопка продолжения принадлежит другому игроку.'
+      );
+
+      return true;
+    }
+
+    return startJob(
+      context,
+      vk,
+      payload.jobKey
+    );
+  }
 
   if (/^!работы$/i.test(originalText)) {
     return sendJobsList(context);

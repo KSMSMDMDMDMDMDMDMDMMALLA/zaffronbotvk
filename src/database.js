@@ -22,6 +22,16 @@ const BANK_MAX_INTEREST_HOURS = 72;
 const BEGINNER_BOX_MAX_LEVEL = 3;
 const BEGINNER_BOX_COOLDOWN_MS =
   10 * 60 * 1000;
+const TRANSFER_DAILY_LIMIT = 5_000_000;
+const FARM_MAX_PLOTS = 8;
+const FARM_MAX_UPGRADE_LEVEL = 5;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MOSCOW_UTC_OFFSET_MS =
+  3 * 60 * 60 * 1000;
+const TRANSFER_DAY_STAT_KEY =
+  'transfer_daily_day';
+const TRANSFER_AMOUNT_STAT_KEY =
+  'transfer_daily_amount';
 
 const BANK_INTEREST_BRACKETS =
   Object.freeze([
@@ -50,14 +60,14 @@ const BUSINESS_MULTIPLIER_SCALES =
 
 const JOB_EXP_REQUIREMENTS = Object.freeze({
   1: 3,
-  2: 3,
+  2: 4,
   3: 5,
-  4: 5,
-  5: 10,
+  4: 6,
+  5: 8,
   6: 10,
-  7: 15,
-  8: 30,
-  9: 45
+  7: 12,
+  8: 15,
+  9: 18
 });
 
 function getJobExperienceRequired(level) {
@@ -75,12 +85,36 @@ function getJobExperienceRequired(level) {
     return JOB_EXP_REQUIREMENTS[safeLevel];
   }
 
-  if (safeLevel >= 10 && safeLevel < 45) {
+  if (safeLevel >= 10 && safeLevel < 15) {
+    return 20;
+  }
+
+  if (safeLevel < 20) {
+    return 24;
+  }
+
+  if (safeLevel < 25) {
+    return 28;
+  }
+
+  if (safeLevel < 30) {
+    return 32;
+  }
+
+  if (safeLevel < 35) {
+    return 36;
+  }
+
+  if (safeLevel < 40) {
+    return 40;
+  }
+
+  if (safeLevel < 45) {
     return 45;
   }
 
-  if (safeLevel >= 45 && safeLevel < 50) {
-    return 10;
+  if (safeLevel < 50) {
+    return 50;
   }
 
   return null;
@@ -410,6 +444,124 @@ async function initializeDatabase() {
       CHECK (last_opened_at >= 0),
       CHECK (opened_count >= 0),
       CHECK (total_earned >= 0)
+    );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS farm_profiles (
+      vk_id INTEGER PRIMARY KEY,
+      plot_count INTEGER NOT NULL DEFAULT 0,
+      irrigation_level INTEGER NOT NULL DEFAULT 0,
+      soil_level INTEGER NOT NULL DEFAULT 0,
+      warehouse_level INTEGER NOT NULL DEFAULT 0,
+      next_plant_at INTEGER NOT NULL DEFAULT 0,
+      next_harvest_at INTEGER NOT NULL DEFAULT 0,
+      total_harvested INTEGER NOT NULL DEFAULT 0,
+      total_earned INTEGER NOT NULL DEFAULT 0,
+
+      CHECK (
+        plot_count >= 0 AND
+        plot_count <= 8
+      ),
+      CHECK (
+        irrigation_level >= 0 AND
+        irrigation_level <= 5
+      ),
+      CHECK (
+        soil_level >= 0 AND
+        soil_level <= 5
+      ),
+      CHECK (
+        warehouse_level >= 0 AND
+        warehouse_level <= 5
+      ),
+      CHECK (next_plant_at >= 0),
+      CHECK (next_harvest_at >= 0),
+      CHECK (total_harvested >= 0),
+      CHECK (total_earned >= 0)
+    );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS farm_seeds (
+      vk_id INTEGER NOT NULL,
+      crop_key TEXT NOT NULL,
+      quantity INTEGER NOT NULL DEFAULT 0,
+
+      PRIMARY KEY (
+        vk_id,
+        crop_key
+      ),
+
+      CHECK (quantity >= 0)
+    );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS farm_plots (
+      vk_id INTEGER NOT NULL,
+      plot_number INTEGER NOT NULL,
+      crop_key TEXT NOT NULL,
+      planted_at INTEGER NOT NULL,
+      ready_at INTEGER NOT NULL,
+      result_code TEXT NOT NULL,
+      yield_amount INTEGER NOT NULL DEFAULT 0,
+      notified_at INTEGER NOT NULL DEFAULT 0,
+
+      PRIMARY KEY (
+        vk_id,
+        plot_number
+      ),
+
+      CHECK (plot_number >= 1),
+      CHECK (ready_at >= planted_at),
+      CHECK (
+        result_code IN (
+          'success',
+          'not_sprouted',
+          'withered'
+        )
+      ),
+      CHECK (yield_amount >= 0)
+    );
+  `);
+
+  const farmPlotColumns = db.prepare(`
+    PRAGMA table_info(farm_plots)
+  `);
+  let hasFarmPlotNotifiedAt = false;
+
+  while (farmPlotColumns.step()) {
+    const column =
+      farmPlotColumns.getAsObject();
+
+    if (column.name === 'notified_at') {
+      hasFarmPlotNotifiedAt = true;
+      break;
+    }
+  }
+
+  farmPlotColumns.free();
+
+  if (!hasFarmPlotNotifiedAt) {
+    db.run(`
+      ALTER TABLE farm_plots
+      ADD COLUMN notified_at INTEGER NOT NULL DEFAULT 0;
+    `);
+  }
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS farm_storage (
+      vk_id INTEGER NOT NULL,
+      crop_key TEXT NOT NULL,
+      quantity INTEGER NOT NULL DEFAULT 0,
+
+      PRIMARY KEY (
+        vk_id,
+        crop_key
+      ),
+
+      CHECK (quantity >= 0)
     );
   `);
 
@@ -1143,10 +1295,77 @@ function removeBalance(vkId, amount) {
   };
 }
 
+function getMoscowTransferDay(currentTime) {
+  const safeCurrentTime = Number(currentTime);
+
+  if (
+    !Number.isFinite(safeCurrentTime) ||
+    safeCurrentTime < 0
+  ) {
+    throw new Error(
+      'Некорректное время перевода'
+    );
+  }
+
+  return Math.floor(
+    (safeCurrentTime + MOSCOW_UTC_OFFSET_MS) /
+    DAY_MS
+  );
+}
+
+function getDailyTransferUsage(
+  vkId,
+  currentTime = Date.now()
+) {
+  ensureDatabase();
+
+  const safeVkId = Number(vkId);
+
+  if (
+    !Number.isInteger(safeVkId) ||
+    safeVkId <= 0
+  ) {
+    throw new Error(
+      'VK ID должен быть положительным целым числом'
+    );
+  }
+
+  const day = getMoscowTransferDay(
+    currentTime
+  );
+  const storedDay = getQuestStat(
+    safeVkId,
+    TRANSFER_DAY_STAT_KEY
+  );
+  const storedAmount = getQuestStat(
+    safeVkId,
+    TRANSFER_AMOUNT_STAT_KEY
+  );
+  const used = storedDay === day
+    ? Math.min(
+      TRANSFER_DAILY_LIMIT,
+      storedAmount
+    )
+    : 0;
+
+  return {
+    day,
+    limit: TRANSFER_DAILY_LIMIT,
+    used,
+    remaining:
+      TRANSFER_DAILY_LIMIT - used,
+    resetAt:
+      (day + 1) * DAY_MS -
+      MOSCOW_UTC_OFFSET_MS
+  };
+}
+
 function transferBalance({
   senderId,
   recipientId,
-  amount
+  amount,
+  enforceDailyLimit = false,
+  currentTime = Date.now()
 }) {
   ensureDatabase();
 
@@ -1189,6 +1408,24 @@ function transferBalance({
       amount: safeAmount,
       balance: senderBalance,
       missing: safeAmount - senderBalance
+    };
+  }
+
+  const dailyTransfer = enforceDailyLimit
+    ? getDailyTransferUsage(
+      safeSenderId,
+      currentTime
+    )
+    : null;
+
+  if (
+    dailyTransfer &&
+    safeAmount > dailyTransfer.remaining
+  ) {
+    return {
+      status: 'daily_limit',
+      amount: safeAmount,
+      ...dailyTransfer
     };
   }
 
@@ -1239,6 +1476,53 @@ function transferBalance({
       ]
     );
 
+    if (dailyTransfer) {
+      const newDailyAmount =
+        dailyTransfer.used + safeAmount;
+
+      db.run(
+        `
+          INSERT INTO quest_stats (
+            vk_id,
+            stat_key,
+            value
+          )
+          VALUES (?, ?, ?)
+
+          ON CONFLICT(vk_id, stat_key)
+          DO UPDATE SET
+            value = excluded.value,
+            updated_at = CURRENT_TIMESTAMP
+        `,
+        [
+          safeSenderId,
+          TRANSFER_DAY_STAT_KEY,
+          dailyTransfer.day
+        ]
+      );
+
+      db.run(
+        `
+          INSERT INTO quest_stats (
+            vk_id,
+            stat_key,
+            value
+          )
+          VALUES (?, ?, ?)
+
+          ON CONFLICT(vk_id, stat_key)
+          DO UPDATE SET
+            value = excluded.value,
+            updated_at = CURRENT_TIMESTAMP
+        `,
+        [
+          safeSenderId,
+          TRANSFER_AMOUNT_STAT_KEY,
+          newDailyAmount
+        ]
+      );
+    }
+
     db.run('COMMIT;');
 
     persistDatabase();
@@ -1249,7 +1533,18 @@ function transferBalance({
       senderBalance:
         senderBalance - safeAmount,
       recipientBalance:
-        recipientBalance + safeAmount
+        recipientBalance + safeAmount,
+      ...(dailyTransfer
+        ? {
+          dailyLimit: dailyTransfer.limit,
+          dailyTransferred:
+            dailyTransfer.used + safeAmount,
+          dailyRemaining:
+            dailyTransfer.remaining - safeAmount,
+          dailyResetAt:
+            dailyTransfer.resetAt
+        }
+        : {})
     };
   } catch (error) {
     try {
@@ -2839,6 +3134,34 @@ function sellMagazineAsset({
       ]
     );
 
+    if (safeItemType === 'houses') {
+      db.run(
+        `
+          DELETE FROM business_states
+          WHERE vk_id = ?
+            AND item_key = ?
+        `,
+        [
+          safeVkId,
+          safeItemKey
+        ]
+      );
+    }
+
+    if (safeItemType === 'cars') {
+      db.run(
+        `
+          DELETE FROM business_states
+          WHERE vk_id = ?
+            AND item_key LIKE ?
+        `,
+        [
+          safeVkId,
+          `car-tuning:${safeItemKey}:%`
+        ]
+      );
+    }
+
     if (safeResaleValue > 0) {
       db.run(
         `
@@ -2940,19 +3263,24 @@ function validateBusinessInput({
   };
 }
 
-function hasBusinessAsset(vkId, itemKey) {
+function hasMagazineAsset(
+  vkId,
+  itemKey,
+  itemType
+) {
   const statement = db.prepare(`
     SELECT 1
     FROM magazine_assets
     WHERE vk_id = ?
       AND item_key = ?
-      AND item_type = 'businesses'
+      AND item_type = ?
     LIMIT 1
   `);
 
   statement.bind([
     vkId,
-    itemKey
+    itemKey,
+    itemType
   ]);
 
   const exists = statement.step();
@@ -2960,6 +3288,14 @@ function hasBusinessAsset(vkId, itemKey) {
   statement.free();
 
   return exists;
+}
+
+function hasBusinessAsset(vkId, itemKey) {
+  return hasMagazineAsset(
+    vkId,
+    itemKey,
+    'businesses'
+  );
 }
 
 function readBusinessState(vkId, itemKey) {
@@ -3357,6 +3693,699 @@ function collectAllBusinessIncome({
       businessCount: payouts.length,
       balance:
         currentBalance + totalPayout
+    };
+  } catch (error) {
+    try {
+      db.run('ROLLBACK;');
+    } catch {
+      // Транзакция могла не успеть начаться.
+    }
+
+    throw error;
+  }
+}
+
+function validatePropertyRentalInput({
+  vkId,
+  itemKey,
+  rentPerHour,
+  currentTime
+}) {
+  const safeVkId = Number(vkId);
+  const safeItemKey =
+    String(itemKey ?? '').trim();
+  const safeRentPerHour =
+    Number(rentPerHour);
+  const safeCurrentTime =
+    Number(currentTime);
+
+  if (
+    !Number.isInteger(safeVkId) ||
+    safeVkId <= 0
+  ) {
+    throw new Error(
+      'VK ID должен быть положительным целым числом'
+    );
+  }
+
+  if (!safeItemKey) {
+    throw new Error(
+      'Не указана недвижимость'
+    );
+  }
+
+  if (
+    !Number.isSafeInteger(safeRentPerHour) ||
+    safeRentPerHour <= 0 ||
+    !Number.isFinite(safeCurrentTime)
+  ) {
+    throw new Error(
+      'Некорректный доход от аренды или время'
+    );
+  }
+
+  return {
+    safeVkId,
+    safeItemKey,
+    safeRentPerHour,
+    safeCurrentTime
+  };
+}
+
+function getPropertyRentalState({
+  vkId,
+  itemKey,
+  rentPerHour,
+  currentTime = Date.now()
+}) {
+  ensureDatabase();
+
+  const {
+    safeVkId,
+    safeItemKey,
+    safeRentPerHour,
+    safeCurrentTime
+  } = validatePropertyRentalInput({
+    vkId,
+    itemKey,
+    rentPerHour,
+    currentTime
+  });
+
+  if (!hasMagazineAsset(
+    safeVkId,
+    safeItemKey,
+    'houses'
+  )) {
+    return {
+      status: 'not_owned'
+    };
+  }
+
+  const state = readBusinessState(
+    safeVkId,
+    safeItemKey
+  );
+
+  if (!state) {
+    return {
+      status: 'inactive',
+      rentPerHour: safeRentPerHour,
+      availableIncome: 0,
+      totalEarned: 0
+    };
+  }
+
+  const accruedIncome =
+    calculateBusinessIncome({
+      baseIncome: safeRentPerHour,
+      upgradeLevel: 0,
+      startedAt: state.lastIncomeAt,
+      currentTime: safeCurrentTime
+    });
+
+  return {
+    status: 'active',
+    rentPerHour: safeRentPerHour,
+    storedIncome: state.storedIncome,
+    accruedIncome,
+    availableIncome:
+      state.storedIncome + accruedIncome,
+    lastIncomeAt: state.lastIncomeAt,
+    totalEarned: state.totalEarned
+  };
+}
+
+function startPropertyRental({
+  vkId,
+  itemKey,
+  rentPerHour,
+  currentTime = Date.now()
+}) {
+  const rental = getPropertyRentalState({
+    vkId,
+    itemKey,
+    rentPerHour,
+    currentTime
+  });
+
+  if (rental.status === 'not_owned') {
+    return rental;
+  }
+
+  if (rental.status === 'active') {
+    return {
+      ...rental,
+      status: 'already_active'
+    };
+  }
+
+  const safeVkId = Number(vkId);
+  const safeItemKey =
+    String(itemKey).trim();
+  const safeCurrentTime =
+    Number(currentTime);
+
+  db.run(
+    `
+      INSERT OR IGNORE INTO business_states (
+        vk_id,
+        item_key,
+        last_income_at
+      )
+      VALUES (?, ?, ?)
+    `,
+    [
+      safeVkId,
+      safeItemKey,
+      safeCurrentTime
+    ]
+  );
+
+  persistDatabase();
+
+  return {
+    ...getPropertyRentalState({
+      vkId: safeVkId,
+      itemKey: safeItemKey,
+      rentPerHour,
+      currentTime: safeCurrentTime
+    }),
+    status: 'started'
+  };
+}
+
+function collectPropertyRent({
+  vkId,
+  itemKey,
+  rentPerHour,
+  currentTime = Date.now()
+}) {
+  const rental = getPropertyRentalState({
+    vkId,
+    itemKey,
+    rentPerHour,
+    currentTime
+  });
+
+  if (
+    rental.status === 'not_owned' ||
+    rental.status === 'inactive'
+  ) {
+    return rental;
+  }
+
+  if (rental.availableIncome <= 0) {
+    return {
+      ...rental,
+      status: 'empty'
+    };
+  }
+
+  const safeVkId = Number(vkId);
+  const safeItemKey =
+    String(itemKey).trim();
+  const safeCurrentTime =
+    Number(currentTime);
+  const payout = rental.availableIncome;
+  const currentBalance =
+    getBalance(safeVkId);
+
+  if (
+    currentBalance >
+    Number.MAX_SAFE_INTEGER - payout
+  ) {
+    return {
+      status: 'balance_limit'
+    };
+  }
+
+  try {
+    db.run('BEGIN TRANSACTION;');
+
+    db.run(
+      `
+        UPDATE business_states
+        SET
+          stored_income = 0,
+          last_income_at = ?,
+          total_earned = total_earned + ?
+        WHERE vk_id = ?
+          AND item_key = ?
+      `,
+      [
+        safeCurrentTime,
+        payout,
+        safeVkId,
+        safeItemKey
+      ]
+    );
+
+    db.run(
+      `
+        INSERT INTO balances (
+          vk_id,
+          dollars
+        )
+        VALUES (?, ?)
+
+        ON CONFLICT(vk_id)
+        DO UPDATE SET
+          dollars = dollars + excluded.dollars
+      `,
+      [
+        safeVkId,
+        payout
+      ]
+    );
+
+    db.run('COMMIT;');
+
+    persistDatabase();
+
+    return {
+      status: 'collected',
+      payout,
+      balance: currentBalance + payout,
+      totalEarned:
+        rental.totalEarned + payout
+    };
+  } catch (error) {
+    try {
+      db.run('ROLLBACK;');
+    } catch {
+      // Транзакция могла не успеть начаться.
+    }
+
+    throw error;
+  }
+}
+
+function collectAllPropertyRent({
+  vkId,
+  properties,
+  currentTime = Date.now()
+}) {
+  ensureDatabase();
+
+  const safeVkId = Number(vkId);
+  const safeCurrentTime =
+    Number(currentTime);
+
+  if (
+    !Number.isInteger(safeVkId) ||
+    safeVkId <= 0
+  ) {
+    throw new Error(
+      'VK ID должен быть положительным целым числом'
+    );
+  }
+
+  if (
+    !Array.isArray(properties) ||
+    properties.length === 0 ||
+    !Number.isFinite(safeCurrentTime)
+  ) {
+    throw new Error(
+      'Не передан список недвижимости'
+    );
+  }
+
+  const payouts = properties
+    .map(property => {
+      const itemKey = String(
+        property.itemKey ?? ''
+      ).trim();
+      const rentPerHour = Number(
+        property.rentPerHour
+      );
+
+      const state = getPropertyRentalState({
+        vkId: safeVkId,
+        itemKey,
+        rentPerHour,
+        currentTime: safeCurrentTime
+      });
+
+      if (state.status !== 'active') {
+        return null;
+      }
+
+      return {
+        itemKey,
+        payout: state.availableIncome
+      };
+    })
+    .filter(Boolean)
+    .filter(item => item.payout > 0);
+
+  const totalPayout = payouts.reduce(
+    (sum, item) => sum + item.payout,
+    0
+  );
+
+  if (totalPayout <= 0) {
+    return {
+      status: 'empty',
+      payout: 0,
+      propertyCount: 0,
+      balance: getBalance(safeVkId)
+    };
+  }
+
+  if (!Number.isSafeInteger(totalPayout)) {
+    throw new Error(
+      'Суммарный доход от аренды превышает технический лимит'
+    );
+  }
+
+  const currentBalance =
+    getBalance(safeVkId);
+
+  if (
+    currentBalance >
+    Number.MAX_SAFE_INTEGER - totalPayout
+  ) {
+    return {
+      status: 'balance_limit'
+    };
+  }
+
+  try {
+    db.run('BEGIN TRANSACTION;');
+
+    for (const item of payouts) {
+      db.run(
+        `
+          UPDATE business_states
+          SET
+            stored_income = 0,
+            last_income_at = ?,
+            total_earned = total_earned + ?
+          WHERE vk_id = ?
+            AND item_key = ?
+        `,
+        [
+          safeCurrentTime,
+          item.payout,
+          safeVkId,
+          item.itemKey
+        ]
+      );
+    }
+
+    db.run(
+      `
+        INSERT INTO balances (
+          vk_id,
+          dollars
+        )
+        VALUES (?, ?)
+
+        ON CONFLICT(vk_id)
+        DO UPDATE SET
+          dollars = dollars + excluded.dollars
+      `,
+      [
+        safeVkId,
+        totalPayout
+      ]
+    );
+
+    db.run('COMMIT;');
+
+    persistDatabase();
+
+    return {
+      status: 'collected',
+      payout: totalPayout,
+      propertyCount: payouts.length,
+      balance: currentBalance + totalPayout
+    };
+  } catch (error) {
+    try {
+      db.run('ROLLBACK;');
+    } catch {
+      // Транзакция могла не успеть начаться.
+    }
+
+    throw error;
+  }
+}
+
+function validateCarTuningIdentity({
+  vkId,
+  carKey,
+  componentKey = null
+}) {
+  const safeVkId = Number(vkId);
+  const safeCarKey =
+    String(carKey ?? '').trim();
+  const safeComponentKey =
+    componentKey === null
+      ? null
+      : String(componentKey ?? '').trim();
+
+  if (
+    !Number.isInteger(safeVkId) ||
+    safeVkId <= 0
+  ) {
+    throw new Error(
+      'VK ID должен быть положительным целым числом'
+    );
+  }
+
+  if (!/^car-[a-z0-9-]+$/.test(safeCarKey)) {
+    throw new Error(
+      'Некорректный автомобиль'
+    );
+  }
+
+  if (
+    safeComponentKey !== null &&
+    !/^[a-z0-9-]+$/.test(safeComponentKey)
+  ) {
+    throw new Error(
+      'Некорректный компонент тюнинга'
+    );
+  }
+
+  return {
+    safeVkId,
+    safeCarKey,
+    safeComponentKey
+  };
+}
+
+function getCarTuningLevels(vkId, carKey) {
+  ensureDatabase();
+
+  const {
+    safeVkId,
+    safeCarKey
+  } = validateCarTuningIdentity({
+    vkId,
+    carKey
+  });
+
+  if (!hasMagazineAsset(
+    safeVkId,
+    safeCarKey,
+    'cars'
+  )) {
+    return {
+      status: 'not_owned',
+      levels: {}
+    };
+  }
+
+  const prefix =
+    `car-tuning:${safeCarKey}:`;
+  const statement = db.prepare(`
+    SELECT
+      item_key,
+      upgrade_level
+    FROM business_states
+    WHERE vk_id = ?
+      AND item_key LIKE ?
+  `);
+
+  statement.bind([
+    safeVkId,
+    `${prefix}%`
+  ]);
+
+  const levels = {};
+
+  while (statement.step()) {
+    const row = statement.getAsObject();
+    const storedKey = String(
+      row.item_key ?? ''
+    );
+    const componentKey =
+      storedKey.startsWith(prefix)
+        ? storedKey.slice(prefix.length)
+        : '';
+
+    if (!/^[a-z0-9-]+$/.test(componentKey)) {
+      continue;
+    }
+
+    levels[componentKey] = Math.min(
+      5,
+      Math.max(
+        0,
+        Math.trunc(
+          Number(row.upgrade_level) || 0
+        )
+      )
+    );
+  }
+
+  statement.free();
+
+  return {
+    status: 'owned',
+    levels
+  };
+}
+
+function upgradeCarTuning({
+  vkId,
+  carKey,
+  componentKey,
+  expectedLevel,
+  price
+}) {
+  ensureDatabase();
+
+  const {
+    safeVkId,
+    safeCarKey,
+    safeComponentKey
+  } = validateCarTuningIdentity({
+    vkId,
+    carKey,
+    componentKey
+  });
+  const safeExpectedLevel =
+    Number(expectedLevel);
+  const safePrice = Number(price);
+
+  if (
+    !Number.isInteger(safeExpectedLevel) ||
+    safeExpectedLevel < 0 ||
+    safeExpectedLevel >= 5
+  ) {
+    throw new Error(
+      'Некорректный уровень тюнинга'
+    );
+  }
+
+  if (
+    !Number.isSafeInteger(safePrice) ||
+    safePrice <= 0
+  ) {
+    throw new Error(
+      'Некорректная цена тюнинга'
+    );
+  }
+
+  const tuning = getCarTuningLevels(
+    safeVkId,
+    safeCarKey
+  );
+
+  if (tuning.status !== 'owned') {
+    return tuning;
+  }
+
+  const currentLevel = Math.max(
+    0,
+    Number(
+      tuning.levels[safeComponentKey]
+    ) || 0
+  );
+
+  if (currentLevel !== safeExpectedLevel) {
+    return {
+      status: 'level_changed',
+      level: currentLevel,
+      balance: getBalance(safeVkId)
+    };
+  }
+
+  const nextLevel = currentLevel + 1;
+
+  if (nextLevel > 5) {
+    return {
+      status: 'max_level',
+      level: currentLevel,
+      balance: getBalance(safeVkId)
+    };
+  }
+
+  const currentBalance =
+    getBalance(safeVkId);
+
+  if (currentBalance < safePrice) {
+    return {
+      status: 'insufficient_funds',
+      price: safePrice,
+      balance: currentBalance,
+      missing: safePrice - currentBalance
+    };
+  }
+
+  const storageKey =
+    `car-tuning:${safeCarKey}:` +
+    safeComponentKey;
+
+  try {
+    db.run('BEGIN TRANSACTION;');
+
+    db.run(
+      `
+        UPDATE balances
+        SET dollars = dollars - ?
+        WHERE vk_id = ?
+      `,
+      [
+        safePrice,
+        safeVkId
+      ]
+    );
+
+    db.run(
+      `
+        INSERT INTO business_states (
+          vk_id,
+          item_key,
+          upgrade_level,
+          last_income_at
+        )
+        VALUES (?, ?, ?, 0)
+
+        ON CONFLICT(vk_id, item_key)
+        DO UPDATE SET
+          upgrade_level = excluded.upgrade_level
+      `,
+      [
+        safeVkId,
+        storageKey,
+        nextLevel
+      ]
+    );
+
+    db.run('COMMIT;');
+
+    persistDatabase();
+
+    return {
+      status: 'upgraded',
+      level: nextLevel,
+      price: safePrice,
+      balance: currentBalance - safePrice
     };
   } catch (error) {
     try {
@@ -5566,6 +6595,1154 @@ function redeemPromo(vkId, code) {
 }
 
 
+function validateFarmVkId(vkId) {
+  const safeVkId = Number(vkId);
+
+  if (!Number.isInteger(safeVkId)) {
+    throw new Error(
+      'VK ID фермера должен быть целым числом'
+    );
+  }
+
+  return safeVkId;
+}
+
+function readFarmProfile(vkId) {
+  const statement = db.prepare(`
+    SELECT
+      plot_count,
+      irrigation_level,
+      soil_level,
+      warehouse_level,
+      next_plant_at,
+      next_harvest_at,
+      total_harvested,
+      total_earned
+    FROM farm_profiles
+    WHERE vk_id = ?
+  `);
+
+  statement.bind([vkId]);
+
+  let profile = null;
+
+  if (statement.step()) {
+    const row = statement.getAsObject();
+
+    profile = {
+      plotCount: Number(row.plot_count) || 0,
+      irrigationLevel:
+        Number(row.irrigation_level) || 0,
+      soilLevel:
+        Number(row.soil_level) || 0,
+      warehouseLevel:
+        Number(row.warehouse_level) || 0,
+      nextPlantAt:
+        Number(row.next_plant_at) || 0,
+      nextHarvestAt:
+        Number(row.next_harvest_at) || 0,
+      totalHarvested:
+        Number(row.total_harvested) || 0,
+      totalEarned:
+        Number(row.total_earned) || 0
+    };
+  }
+
+  statement.free();
+
+  return profile;
+}
+
+function getFarmState(vkId) {
+  ensureDatabase();
+
+  const safeVkId = validateFarmVkId(vkId);
+  const profile = readFarmProfile(safeVkId) ?? {
+    plotCount: 0,
+    irrigationLevel: 0,
+    soilLevel: 0,
+    warehouseLevel: 0,
+    nextPlantAt: 0,
+    nextHarvestAt: 0,
+    totalHarvested: 0,
+    totalEarned: 0
+  };
+  const plots = [];
+  const plotStatement = db.prepare(`
+    SELECT
+      plot_number,
+      crop_key,
+      planted_at,
+      ready_at,
+      result_code,
+      yield_amount,
+      notified_at
+    FROM farm_plots
+    WHERE vk_id = ?
+    ORDER BY plot_number ASC
+  `);
+
+  plotStatement.bind([safeVkId]);
+
+  while (plotStatement.step()) {
+    const row = plotStatement.getAsObject();
+
+    plots.push({
+      plotNumber: Number(row.plot_number),
+      cropKey: String(row.crop_key),
+      plantedAt: Number(row.planted_at),
+      readyAt: Number(row.ready_at),
+      resultCode: String(row.result_code),
+      yieldAmount: Number(row.yield_amount) || 0,
+      notifiedAt: Number(row.notified_at) || 0
+    });
+  }
+
+  plotStatement.free();
+
+  const seeds = [];
+  const seedStatement = db.prepare(`
+    SELECT crop_key, quantity
+    FROM farm_seeds
+    WHERE vk_id = ?
+      AND quantity > 0
+    ORDER BY crop_key ASC
+  `);
+
+  seedStatement.bind([safeVkId]);
+
+  while (seedStatement.step()) {
+    const row = seedStatement.getAsObject();
+
+    seeds.push({
+      cropKey: String(row.crop_key),
+      quantity: Number(row.quantity) || 0
+    });
+  }
+
+  seedStatement.free();
+
+  const storage = [];
+  const storageStatement = db.prepare(`
+    SELECT crop_key, quantity
+    FROM farm_storage
+    WHERE vk_id = ?
+      AND quantity > 0
+    ORDER BY crop_key ASC
+  `);
+
+  storageStatement.bind([safeVkId]);
+
+  while (storageStatement.step()) {
+    const row = storageStatement.getAsObject();
+
+    storage.push({
+      cropKey: String(row.crop_key),
+      quantity: Number(row.quantity) || 0
+    });
+  }
+
+  storageStatement.free();
+
+  return {
+    ...profile,
+    plots,
+    seeds,
+    storage,
+    storageUsed: storage.reduce(
+      (sum, item) => sum + item.quantity,
+      0
+    )
+  };
+}
+
+function getPendingFarmNotifications() {
+  ensureDatabase();
+
+  const statement = db.prepare(`
+    SELECT
+      vk_id,
+      plot_number,
+      crop_key,
+      ready_at
+    FROM farm_plots
+    WHERE notified_at = 0
+    ORDER BY ready_at ASC
+  `);
+  const notifications = [];
+
+  while (statement.step()) {
+    const row = statement.getAsObject();
+
+    notifications.push({
+      vkId: Number(row.vk_id),
+      plotNumber: Number(row.plot_number),
+      cropKey: String(row.crop_key),
+      readyAt: Number(row.ready_at)
+    });
+  }
+
+  statement.free();
+
+  return notifications;
+}
+
+function claimFarmHarvestNotification({
+  vkId,
+  plotNumber,
+  currentTime = Date.now()
+}) {
+  ensureDatabase();
+
+  const safeVkId = validateFarmVkId(vkId);
+  const safePlotNumber = Number(plotNumber);
+  const safeCurrentTime = Number(currentTime);
+
+  if (
+    !Number.isInteger(safePlotNumber) ||
+    safePlotNumber < 1 ||
+    safePlotNumber > FARM_MAX_PLOTS ||
+    !Number.isSafeInteger(safeCurrentTime) ||
+    safeCurrentTime < 0
+  ) {
+    throw new Error(
+      'Некорректные данные уведомления фермы'
+    );
+  }
+
+  const statement = db.prepare(`
+    SELECT
+      crop_key,
+      ready_at,
+      notified_at
+    FROM farm_plots
+    WHERE vk_id = ?
+      AND plot_number = ?
+  `);
+
+  statement.bind([
+    safeVkId,
+    safePlotNumber
+  ]);
+
+  let plot = null;
+
+  if (statement.step()) {
+    const row = statement.getAsObject();
+
+    plot = {
+      cropKey: String(row.crop_key),
+      readyAt: Number(row.ready_at),
+      notifiedAt:
+        Number(row.notified_at) || 0
+    };
+  }
+
+  statement.free();
+
+  if (!plot) {
+    return { status: 'missing' };
+  }
+
+  if (plot.notifiedAt > 0) {
+    return {
+      status: 'already_notified',
+      ...plot
+    };
+  }
+
+  if (plot.readyAt > safeCurrentTime) {
+    return {
+      status: 'too_early',
+      ...plot
+    };
+  }
+
+  db.run(
+    `
+      UPDATE farm_plots
+      SET notified_at = ?
+      WHERE vk_id = ?
+        AND plot_number = ?
+        AND notified_at = 0
+    `,
+    [
+      Math.max(1, safeCurrentTime),
+      safeVkId,
+      safePlotNumber
+    ]
+  );
+
+  persistDatabase();
+
+  return {
+    status: 'claimed',
+    vkId: safeVkId,
+    plotNumber: safePlotNumber,
+    cropKey: plot.cropKey,
+    readyAt: plot.readyAt,
+    notifiedAt:
+      Math.max(1, safeCurrentTime)
+  };
+}
+
+function purchaseFarmPlot({
+  vkId,
+  price
+}) {
+  ensureDatabase();
+
+  const safeVkId = validateFarmVkId(vkId);
+  const safePrice = Number(price);
+
+  if (
+    !Number.isSafeInteger(safePrice) ||
+    safePrice <= 0
+  ) {
+    throw new Error(
+      'Некорректная стоимость участка'
+    );
+  }
+
+  const state = getFarmState(safeVkId);
+
+  if (state.plotCount >= FARM_MAX_PLOTS) {
+    return {
+      status: 'max_plots',
+      plotCount: state.plotCount
+    };
+  }
+
+  const balance = getBalance(safeVkId);
+
+  if (balance < safePrice) {
+    return {
+      status: 'insufficient_funds',
+      price: safePrice,
+      balance,
+      missing: safePrice - balance
+    };
+  }
+
+  try {
+    db.run('BEGIN TRANSACTION;');
+
+    db.run(
+      `
+        UPDATE balances
+        SET dollars = dollars - ?
+        WHERE vk_id = ?
+      `,
+      [safePrice, safeVkId]
+    );
+
+    db.run(
+      `
+        INSERT INTO farm_profiles (
+          vk_id,
+          plot_count
+        )
+        VALUES (?, 1)
+
+        ON CONFLICT(vk_id)
+        DO UPDATE SET
+          plot_count = plot_count + 1
+      `,
+      [safeVkId]
+    );
+
+    db.run('COMMIT;');
+    persistDatabase();
+
+    return {
+      status: 'purchased',
+      price: safePrice,
+      plotCount: state.plotCount + 1,
+      balance: balance - safePrice
+    };
+  } catch (error) {
+    try {
+      db.run('ROLLBACK;');
+    } catch {
+      // Транзакция могла не успеть начаться.
+    }
+
+    throw error;
+  }
+}
+
+function purchaseFarmSeeds({
+  vkId,
+  cropKey,
+  quantity,
+  unitPrice,
+  requiredPlots
+}) {
+  ensureDatabase();
+
+  const safeVkId = validateFarmVkId(vkId);
+  const safeCropKey =
+    String(cropKey ?? '').trim();
+  const safeQuantity = Number(quantity);
+  const safeUnitPrice = Number(unitPrice);
+  const safeRequiredPlots = Number(requiredPlots);
+
+  if (!safeCropKey) {
+    throw new Error('Не указана культура');
+  }
+
+  if (
+    !Number.isInteger(safeQuantity) ||
+    safeQuantity <= 0 ||
+    safeQuantity > 1000
+  ) {
+    throw new Error(
+      'Количество семян должно быть от 1 до 1000'
+    );
+  }
+
+  if (
+    !Number.isSafeInteger(safeUnitPrice) ||
+    safeUnitPrice <= 0 ||
+    !Number.isInteger(safeRequiredPlots) ||
+    safeRequiredPlots < 1 ||
+    safeRequiredPlots > FARM_MAX_PLOTS
+  ) {
+    throw new Error(
+      'Некорректная цена или условие семян'
+    );
+  }
+
+  const state = getFarmState(safeVkId);
+
+  if (state.plotCount === 0) {
+    return { status: 'no_farm' };
+  }
+
+  if (state.plotCount < safeRequiredPlots) {
+    return {
+      status: 'crop_locked',
+      requiredPlots: safeRequiredPlots,
+      plotCount: state.plotCount
+    };
+  }
+
+  const price = safeUnitPrice * safeQuantity;
+  const balance = getBalance(safeVkId);
+
+  if (
+    !Number.isSafeInteger(price) ||
+    price <= 0
+  ) {
+    throw new Error(
+      'Стоимость покупки вышла за допустимый предел'
+    );
+  }
+
+  if (balance < price) {
+    return {
+      status: 'insufficient_funds',
+      price,
+      balance,
+      missing: price - balance
+    };
+  }
+
+  const currentQuantity =
+    state.seeds.find(item =>
+      item.cropKey === safeCropKey
+    )?.quantity ?? 0;
+
+  try {
+    db.run('BEGIN TRANSACTION;');
+
+    db.run(
+      `
+        UPDATE balances
+        SET dollars = dollars - ?
+        WHERE vk_id = ?
+      `,
+      [price, safeVkId]
+    );
+
+    db.run(
+      `
+        INSERT INTO farm_seeds (
+          vk_id,
+          crop_key,
+          quantity
+        )
+        VALUES (?, ?, ?)
+
+        ON CONFLICT(vk_id, crop_key)
+        DO UPDATE SET
+          quantity = quantity + excluded.quantity
+      `,
+      [
+        safeVkId,
+        safeCropKey,
+        safeQuantity
+      ]
+    );
+
+    db.run('COMMIT;');
+    persistDatabase();
+
+    return {
+      status: 'purchased',
+      cropKey: safeCropKey,
+      quantity: safeQuantity,
+      seedCount:
+        currentQuantity + safeQuantity,
+      price,
+      balance: balance - price
+    };
+  } catch (error) {
+    try {
+      db.run('ROLLBACK;');
+    } catch {
+      // Транзакция могла не успеть начаться.
+    }
+
+    throw error;
+  }
+}
+
+function plantFarmCrop({
+  vkId,
+  plotNumber,
+  cropKey,
+  requiredPlots,
+  currentTime = Date.now(),
+  readyAt,
+  resultCode,
+  yieldAmount,
+  cooldownMs
+}) {
+  ensureDatabase();
+
+  const safeVkId = validateFarmVkId(vkId);
+  const safePlotNumber = Number(plotNumber);
+  const safeCropKey =
+    String(cropKey ?? '').trim();
+  const safeRequiredPlots = Number(requiredPlots);
+  const safeCurrentTime = Number(currentTime);
+  const safeReadyAt = Number(readyAt);
+  const safeResultCode =
+    String(resultCode ?? '').trim();
+  const safeYieldAmount = Number(yieldAmount);
+  const safeCooldownMs = Number(cooldownMs);
+
+  if (
+    !Number.isInteger(safePlotNumber) ||
+    safePlotNumber < 1 ||
+    safePlotNumber > FARM_MAX_PLOTS ||
+    !safeCropKey ||
+    !Number.isInteger(safeRequiredPlots) ||
+    safeRequiredPlots < 1 ||
+    safeRequiredPlots > FARM_MAX_PLOTS ||
+    !Number.isSafeInteger(safeCurrentTime) ||
+    !Number.isSafeInteger(safeReadyAt) ||
+    safeReadyAt <= safeCurrentTime ||
+    !['success', 'not_sprouted', 'withered']
+      .includes(safeResultCode) ||
+    !Number.isSafeInteger(safeYieldAmount) ||
+    safeYieldAmount < 0 ||
+    !Number.isSafeInteger(safeCooldownMs) ||
+    safeCooldownMs < 0
+  ) {
+    throw new Error(
+      'Некорректные данные посадки'
+    );
+  }
+
+  if (
+    safeResultCode === 'success' &&
+    safeYieldAmount < 1
+  ) {
+    throw new Error(
+      'Успешная посадка должна дать урожай'
+    );
+  }
+
+  const state = getFarmState(safeVkId);
+
+  if (
+    state.plotCount === 0 ||
+    safePlotNumber > state.plotCount
+  ) {
+    return {
+      status: 'plot_locked',
+      plotCount: state.plotCount
+    };
+  }
+
+  if (state.plotCount < safeRequiredPlots) {
+    return {
+      status: 'crop_locked',
+      requiredPlots: safeRequiredPlots,
+      plotCount: state.plotCount
+    };
+  }
+
+  if (state.nextPlantAt > safeCurrentTime) {
+    return {
+      status: 'cooldown',
+      readyAt: state.nextPlantAt,
+      remainingMs:
+        state.nextPlantAt - safeCurrentTime
+    };
+  }
+
+  if (state.plots.some(plot =>
+    plot.plotNumber === safePlotNumber
+  )) {
+    return { status: 'plot_occupied' };
+  }
+
+  const seedCount =
+    state.seeds.find(seed =>
+      seed.cropKey === safeCropKey
+    )?.quantity ?? 0;
+
+  if (seedCount <= 0) {
+    return { status: 'no_seeds' };
+  }
+
+  try {
+    db.run('BEGIN TRANSACTION;');
+
+    db.run(
+      `
+        UPDATE farm_seeds
+        SET quantity = quantity - 1
+        WHERE vk_id = ?
+          AND crop_key = ?
+      `,
+      [safeVkId, safeCropKey]
+    );
+
+    db.run(
+      `
+        DELETE FROM farm_seeds
+        WHERE vk_id = ?
+          AND crop_key = ?
+          AND quantity <= 0
+      `,
+      [safeVkId, safeCropKey]
+    );
+
+    db.run(
+      `
+        INSERT INTO farm_plots (
+          vk_id,
+          plot_number,
+          crop_key,
+          planted_at,
+          ready_at,
+          result_code,
+          yield_amount
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        safeVkId,
+        safePlotNumber,
+        safeCropKey,
+        safeCurrentTime,
+        safeReadyAt,
+        safeResultCode,
+        safeYieldAmount
+      ]
+    );
+
+    db.run(
+      `
+        UPDATE farm_profiles
+        SET next_plant_at = ?
+        WHERE vk_id = ?
+      `,
+      [
+        safeCurrentTime + safeCooldownMs,
+        safeVkId
+      ]
+    );
+
+    db.run('COMMIT;');
+    persistDatabase();
+
+    return {
+      status: 'planted',
+      plotNumber: safePlotNumber,
+      cropKey: safeCropKey,
+      readyAt: safeReadyAt,
+      seedCount: seedCount - 1
+    };
+  } catch (error) {
+    try {
+      db.run('ROLLBACK;');
+    } catch {
+      // Транзакция могла не успеть начаться.
+    }
+
+    throw error;
+  }
+}
+
+function harvestFarmCrop({
+  vkId,
+  plotNumber,
+  warehouseCapacity,
+  currentTime = Date.now(),
+  cooldownMs
+}) {
+  ensureDatabase();
+
+  const safeVkId = validateFarmVkId(vkId);
+  const safePlotNumber = Number(plotNumber);
+  const safeWarehouseCapacity =
+    Number(warehouseCapacity);
+  const safeCurrentTime = Number(currentTime);
+  const safeCooldownMs = Number(cooldownMs);
+
+  if (
+    !Number.isInteger(safePlotNumber) ||
+    safePlotNumber < 1 ||
+    safePlotNumber > FARM_MAX_PLOTS ||
+    !Number.isSafeInteger(
+      safeWarehouseCapacity
+    ) ||
+    safeWarehouseCapacity < 1 ||
+    !Number.isSafeInteger(safeCurrentTime) ||
+    !Number.isSafeInteger(safeCooldownMs) ||
+    safeCooldownMs < 0
+  ) {
+    throw new Error(
+      'Некорректные данные сбора урожая'
+    );
+  }
+
+  const state = getFarmState(safeVkId);
+  const plot = state.plots.find(item =>
+    item.plotNumber === safePlotNumber
+  );
+
+  if (!plot) {
+    return { status: 'plot_empty' };
+  }
+
+  if (plot.readyAt > safeCurrentTime) {
+    return {
+      status: 'growing',
+      readyAt: plot.readyAt,
+      remainingMs:
+        plot.readyAt - safeCurrentTime
+    };
+  }
+
+  if (state.nextHarvestAt > safeCurrentTime) {
+    return {
+      status: 'cooldown',
+      readyAt: state.nextHarvestAt,
+      remainingMs:
+        state.nextHarvestAt - safeCurrentTime
+    };
+  }
+
+  if (
+    plot.resultCode === 'success' &&
+    state.storageUsed + plot.yieldAmount >
+      safeWarehouseCapacity
+  ) {
+    return {
+      status: 'warehouse_full',
+      requiredSpace: plot.yieldAmount,
+      freeSpace:
+        safeWarehouseCapacity -
+        state.storageUsed
+    };
+  }
+
+  try {
+    db.run('BEGIN TRANSACTION;');
+
+    db.run(
+      `
+        DELETE FROM farm_plots
+        WHERE vk_id = ?
+          AND plot_number = ?
+      `,
+      [safeVkId, safePlotNumber]
+    );
+
+    db.run(
+      `
+        UPDATE farm_profiles
+        SET
+          next_harvest_at = ?,
+          total_harvested =
+            total_harvested + ?
+        WHERE vk_id = ?
+      `,
+      [
+        safeCurrentTime + safeCooldownMs,
+        plot.resultCode === 'success'
+          ? plot.yieldAmount
+          : 0,
+        safeVkId
+      ]
+    );
+
+    if (plot.resultCode === 'success') {
+      db.run(
+        `
+          INSERT INTO farm_storage (
+            vk_id,
+            crop_key,
+            quantity
+          )
+          VALUES (?, ?, ?)
+
+          ON CONFLICT(vk_id, crop_key)
+          DO UPDATE SET
+            quantity = quantity + excluded.quantity
+        `,
+        [
+          safeVkId,
+          plot.cropKey,
+          plot.yieldAmount
+        ]
+      );
+    }
+
+    db.run('COMMIT;');
+    persistDatabase();
+
+    return {
+      status: plot.resultCode === 'success'
+        ? 'harvested'
+        : 'failed',
+      resultCode: plot.resultCode,
+      cropKey: plot.cropKey,
+      quantity: plot.yieldAmount,
+      storageUsed:
+        state.storageUsed +
+        (plot.resultCode === 'success'
+          ? plot.yieldAmount
+          : 0)
+    };
+  } catch (error) {
+    try {
+      db.run('ROLLBACK;');
+    } catch {
+      // Транзакция могла не успеть начаться.
+    }
+
+    throw error;
+  }
+}
+
+function upgradeFarm({
+  vkId,
+  upgradeKey,
+  price
+}) {
+  ensureDatabase();
+
+  const safeVkId = validateFarmVkId(vkId);
+  const safeUpgradeKey =
+    String(upgradeKey ?? '').trim();
+  const safePrice = Number(price);
+  const fields = {
+    irrigation: 'irrigation_level',
+    soil: 'soil_level',
+    warehouse: 'warehouse_level'
+  };
+  const stateFields = {
+    irrigation: 'irrigationLevel',
+    soil: 'soilLevel',
+    warehouse: 'warehouseLevel'
+  };
+  const databaseField = fields[safeUpgradeKey];
+  const stateField = stateFields[safeUpgradeKey];
+
+  if (
+    !databaseField ||
+    !Number.isSafeInteger(safePrice) ||
+    safePrice <= 0
+  ) {
+    throw new Error(
+      'Некорректное улучшение фермы'
+    );
+  }
+
+  const state = getFarmState(safeVkId);
+
+  if (state.plotCount === 0) {
+    return { status: 'no_farm' };
+  }
+
+  const currentLevel = state[stateField];
+
+  if (currentLevel >= FARM_MAX_UPGRADE_LEVEL) {
+    return {
+      status: 'max_level',
+      level: currentLevel
+    };
+  }
+
+  const balance = getBalance(safeVkId);
+
+  if (balance < safePrice) {
+    return {
+      status: 'insufficient_funds',
+      price: safePrice,
+      balance,
+      missing: safePrice - balance
+    };
+  }
+
+  try {
+    db.run('BEGIN TRANSACTION;');
+
+    db.run(
+      `
+        UPDATE balances
+        SET dollars = dollars - ?
+        WHERE vk_id = ?
+      `,
+      [safePrice, safeVkId]
+    );
+
+    db.run(
+      `
+        UPDATE farm_profiles
+        SET ${databaseField} =
+          ${databaseField} + 1
+        WHERE vk_id = ?
+      `,
+      [safeVkId]
+    );
+
+    db.run('COMMIT;');
+    persistDatabase();
+
+    return {
+      status: 'upgraded',
+      upgradeKey: safeUpgradeKey,
+      level: currentLevel + 1,
+      price: safePrice,
+      balance: balance - safePrice
+    };
+  } catch (error) {
+    try {
+      db.run('ROLLBACK;');
+    } catch {
+      // Транзакция могла не успеть начаться.
+    }
+
+    throw error;
+  }
+}
+
+function sellFarmProduce({
+  vkId,
+  cropKey,
+  unitPrice
+}) {
+  ensureDatabase();
+
+  const safeVkId = validateFarmVkId(vkId);
+  const safeCropKey =
+    String(cropKey ?? '').trim();
+  const safeUnitPrice = Number(unitPrice);
+
+  if (
+    !safeCropKey ||
+    !Number.isSafeInteger(safeUnitPrice) ||
+    safeUnitPrice <= 0
+  ) {
+    throw new Error(
+      'Некорректные данные продажи урожая'
+    );
+  }
+
+  const state = getFarmState(safeVkId);
+  const item = state.storage.find(entry =>
+    entry.cropKey === safeCropKey
+  );
+
+  if (!item || item.quantity <= 0) {
+    return { status: 'empty' };
+  }
+
+  const earned = item.quantity * safeUnitPrice;
+  const balance = getBalance(safeVkId);
+
+  if (
+    !Number.isSafeInteger(earned) ||
+    balance > Number.MAX_SAFE_INTEGER - earned
+  ) {
+    return { status: 'balance_limit' };
+  }
+
+  try {
+    db.run('BEGIN TRANSACTION;');
+
+    db.run(
+      `
+        DELETE FROM farm_storage
+        WHERE vk_id = ?
+          AND crop_key = ?
+      `,
+      [safeVkId, safeCropKey]
+    );
+
+    db.run(
+      `
+        INSERT INTO balances (
+          vk_id,
+          dollars
+        )
+        VALUES (?, ?)
+
+        ON CONFLICT(vk_id)
+        DO UPDATE SET
+          dollars = dollars + excluded.dollars
+      `,
+      [safeVkId, earned]
+    );
+
+    db.run(
+      `
+        UPDATE farm_profiles
+        SET total_earned = total_earned + ?
+        WHERE vk_id = ?
+      `,
+      [earned, safeVkId]
+    );
+
+    db.run('COMMIT;');
+    persistDatabase();
+
+    return {
+      status: 'sold',
+      cropKey: safeCropKey,
+      quantity: item.quantity,
+      earned,
+      balance: balance + earned
+    };
+  } catch (error) {
+    try {
+      db.run('ROLLBACK;');
+    } catch {
+      // Транзакция могла не успеть начаться.
+    }
+
+    throw error;
+  }
+}
+
+function sellAllFarmProduce({
+  vkId,
+  prices
+}) {
+  ensureDatabase();
+
+  const safeVkId = validateFarmVkId(vkId);
+  const state = getFarmState(safeVkId);
+  const sellableItems = state.storage
+    .map(item => ({
+      ...item,
+      unitPrice: Number(prices?.[item.cropKey])
+    }))
+    .filter(item =>
+      Number.isSafeInteger(item.unitPrice) &&
+      item.unitPrice > 0
+    );
+
+  if (sellableItems.length === 0) {
+    return { status: 'empty' };
+  }
+
+  const earned = sellableItems.reduce(
+    (sum, item) =>
+      sum + item.quantity * item.unitPrice,
+    0
+  );
+  const quantity = sellableItems.reduce(
+    (sum, item) => sum + item.quantity,
+    0
+  );
+  const balance = getBalance(safeVkId);
+
+  if (
+    !Number.isSafeInteger(earned) ||
+    earned <= 0 ||
+    balance > Number.MAX_SAFE_INTEGER - earned
+  ) {
+    return { status: 'balance_limit' };
+  }
+
+  try {
+    db.run('BEGIN TRANSACTION;');
+
+    for (const item of sellableItems) {
+      db.run(
+        `
+          DELETE FROM farm_storage
+          WHERE vk_id = ?
+            AND crop_key = ?
+        `,
+        [safeVkId, item.cropKey]
+      );
+    }
+
+    db.run(
+      `
+        INSERT INTO balances (
+          vk_id,
+          dollars
+        )
+        VALUES (?, ?)
+
+        ON CONFLICT(vk_id)
+        DO UPDATE SET
+          dollars = dollars + excluded.dollars
+      `,
+      [safeVkId, earned]
+    );
+
+    db.run(
+      `
+        UPDATE farm_profiles
+        SET total_earned = total_earned + ?
+        WHERE vk_id = ?
+      `,
+      [earned, safeVkId]
+    );
+
+    db.run('COMMIT;');
+    persistDatabase();
+
+    return {
+      status: 'sold',
+      cropCount: sellableItems.length,
+      quantity,
+      earned,
+      balance: balance + earned
+    };
+  } catch (error) {
+    try {
+      db.run('ROLLBACK;');
+    } catch {
+      // Транзакция могла не успеть начаться.
+    }
+
+    throw error;
+  }
+}
+
 module.exports = {
   formatMoney,
   JOB_MAX_LEVEL,
@@ -5595,9 +7772,23 @@ module.exports = {
   addBalance,
   changeBalance,
   removeBalance,
+  TRANSFER_DAILY_LIMIT,
+  getDailyTransferUsage,
   transferBalance,
   setBalance,
   resetBalance,
+  FARM_MAX_PLOTS,
+  FARM_MAX_UPGRADE_LEVEL,
+  getFarmState,
+  getPendingFarmNotifications,
+  claimFarmHarvestNotification,
+  purchaseFarmPlot,
+  purchaseFarmSeeds,
+  plantFarmCrop,
+  harvestFarmCrop,
+  upgradeFarm,
+  sellFarmProduce,
+  sellAllFarmProduce,
   getGameDebt,
   applyGamePenalty,
   applyGameReward,
@@ -5623,6 +7814,12 @@ module.exports = {
   collectAllBusinessIncome,
   upgradeBusiness,
   sellBusiness,
+  getPropertyRentalState,
+  startPropertyRental,
+  collectPropertyRent,
+  collectAllPropertyRent,
+  getCarTuningLevels,
+  upgradeCarTuning,
   BANK_MAX_INTEREST_HOURS,
   BANK_INTEREST_BRACKETS,
   BANK_FREE_WITHDRAWAL_LIMIT,

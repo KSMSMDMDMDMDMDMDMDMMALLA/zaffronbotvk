@@ -160,7 +160,7 @@ async function sendFishingHome(context) {
     await context.send({
       message:
         '❌ Для рыбалки нужна собственная лодка.\n\n' +
-        'Самая доступная лодка стоит 30.000 $.',
+        'Самая доступная лодка стоит 30.000 ₽.',
       keyboard: createNoBoatKeyboard()
     });
 
@@ -189,7 +189,7 @@ function formatCatchMessage(catchResult) {
     return (
       `${catchResult.emoji} Вы поймали рыбу «${catchResult.title}»!\n` +
       `⚖ Вес: ${formatWeight(catchResult.weightGrams)}\n` +
-      `💰 Оценка: ${formatMoney(catchResult.value)} $`
+      `💰 Оценка: ${formatMoney(catchResult.value)} ₽`
     );
   }
 
@@ -200,7 +200,7 @@ function formatCatchMessage(catchResult) {
   return (
     `${catchResult.emoji} Вы выловили ${typeText} «${catchResult.title}»!\n` +
     `⚖ Вес: ${formatWeight(catchResult.weightGrams)}\n` +
-    `💰 Оценка: ${formatMoney(catchResult.value)} $`
+    `💰 Оценка: ${formatMoney(catchResult.value)} ₽`
   );
 }
 
@@ -307,9 +307,9 @@ async function startFishing(
         '🏁 Рыбалка завершена!\n\n' +
         `🎒 Поймано за выход: ${sessionCatches.length}\n` +
         `⚖ Общий вес: ${formatWeight(sessionWeight)}\n` +
-        `💰 Стоимость выхода: ${formatMoney(sessionValue)} $\n\n` +
+        `💰 Стоимость выхода: ${formatMoney(sessionValue)} ₽\n\n` +
         `📦 Всего непроданного улова: ${inventory.catchCount}\n` +
-        `💵 Общая оценка: ${formatMoney(inventory.totalValue)} $`,
+        `💵 Общая оценка: ${formatMoney(inventory.totalValue)} ₽`,
       keyboard: createFishingResultKeyboard()
     });
   } catch (error) {
@@ -351,7 +351,7 @@ async function sendInventory(context) {
   const lines = inventory.items.map(item => (
     `• ${item.title} ×${item.count}\n` +
     `  ${formatWeight(item.totalWeightGrams)} — ` +
-    `${formatMoney(item.totalValue)} $`
+    `${formatMoney(item.totalValue)} ₽`
   ));
 
   await context.send({
@@ -360,7 +360,7 @@ async function sendInventory(context) {
       `${lines.join('\n\n')}\n\n` +
       `📦 Всего: ${inventory.catchCount}\n` +
       `⚖ Вес: ${formatWeight(inventory.totalWeightGrams)}\n` +
-      `💰 Оценка: ${formatMoney(inventory.totalValue)} $`,
+      `💰 Оценка: ${formatMoney(inventory.totalValue)} ₽`,
     keyboard: createFishingResultKeyboard()
   });
 
@@ -394,8 +394,8 @@ async function sellInventory(context) {
       '💰 Весь улов продан!\n\n' +
       `📦 Предметов: ${result.catchCount}\n` +
       `⚖ Общий вес: ${formatWeight(result.totalWeightGrams)}\n` +
-      `💵 Получено: ${formatMoney(result.earned)} $\n` +
-      `🏦 Баланс: ${formatMoney(result.balance)} $`,
+      `💵 Получено: ${formatMoney(result.earned)} ₽\n` +
+      `🏦 Баланс: ${formatMoney(result.balance)} ₽`,
     keyboard: createFishingReturnKeyboard()
   });
 

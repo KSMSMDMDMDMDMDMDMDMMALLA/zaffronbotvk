@@ -86,8 +86,8 @@ async function handle(context) {
 
     await context.send(
       '🎉 Промокод активирован!\n\n' +
-      `💵 Получено: +${formatMoney(result.amount)} $\n` +
-      `🏦 Баланс: ${formatMoney(result.total)} $`
+      `💵 Получено: +${formatMoney(result.amount)} ₽\n` +
+      `🏦 Баланс: ${formatMoney(result.total)} ₽`
     );
 
     return true;

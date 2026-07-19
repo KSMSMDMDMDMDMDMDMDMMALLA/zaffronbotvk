@@ -17,7 +17,7 @@ function parseAmount(value) {
   const normalized = String(value ?? '')
     .trim()
     .toLowerCase()
-    .replace(/\$$/, '')
+    .replace(/[$₽]$/, '')
     .trim();
 
   if (
@@ -63,7 +63,7 @@ function formatPercentFromBps(bps) {
 function createBankKeyboard() {
   return Keyboard.builder()
     .textButton({
-      label: '➕ 100.000 $',
+      label: '➕ 100.000 ₽',
       payload: {
         command: 'bank_deposit',
         amount: '100000'
@@ -71,7 +71,7 @@ function createBankKeyboard() {
       color: Keyboard.POSITIVE_COLOR
     })
     .textButton({
-      label: '➕ 1.000.000 $',
+      label: '➕ 1.000.000 ₽',
       payload: {
         command: 'bank_deposit',
         amount: '1000000'
@@ -88,7 +88,7 @@ function createBankKeyboard() {
     })
     .row()
     .textButton({
-      label: '➖ 100.000 $',
+      label: '➖ 100.000 ₽',
       payload: {
         command: 'bank_withdraw_request',
         amount: '100000'
@@ -96,7 +96,7 @@ function createBankKeyboard() {
       color: Keyboard.PRIMARY_COLOR
     })
     .textButton({
-      label: '➖ 1.000.000 $',
+      label: '➖ 1.000.000 ₽',
       payload: {
         command: 'bank_withdraw_request',
         amount: '1000000'
@@ -182,29 +182,29 @@ async function sendBankHome(context) {
     account.interestCredited > 0
       ? (
         `\n✨ Начислено сейчас: ` +
-        `${formatMoney(account.interestCredited)} $`
+        `${formatMoney(account.interestCredited)} ₽`
       )
       : '';
 
   await context.send({
     message:
       '🏦 Банк Zaffron\n\n' +
-      `💵 На руках: ${formatMoney(walletBalance)} $\n` +
-      `🏦 На вкладе: ${formatMoney(account.balance)} $\n` +
-      `📈 Доход за следующий час: ${formatMoney(account.hourlyIncome)} $\n` +
+      `💵 На руках: ${formatMoney(walletBalance)} ₽\n` +
+      `🏦 На вкладе: ${formatMoney(account.balance)} ₽\n` +
+      `📈 Доход за следующий час: ${formatMoney(account.hourlyIncome)} ₽\n` +
       `📊 Эффективная ставка: ${formatPercent(account.effectiveRatePercent)} в час\n` +
-      `✨ Всего получено процентов: ${formatMoney(account.totalInterest)} $` +
+      `✨ Всего получено процентов: ${formatMoney(account.totalInterest)} ₽` +
       creditedText + '\n\n' +
       'Процент начисляется частями:\n' +
-      '• первые 1.000.000 $ — 30%\n' +
+      '• первые 1.000.000 ₽ — 30%\n' +
       '• часть от 1 до 10 млн — 2%\n' +
       '• часть от 10 до 100 млн — 0.1%\n' +
       '• часть от 100 млн до 1 млрд — 0.01%\n' +
       '• часть свыше 1 млрд — 0.001%\n\n' +
       'Проценты копятся максимум за 72 часа отсутствия.\n\n' +
       'Комиссия при снятии:\n' +
-      '• меньше 100.000 $ — без комиссии\n' +
-      '• от 100.000 $ — около 10% часового дохода снимаемой суммы\n\n' +
+      '• меньше 100.000 ₽ — без комиссии\n' +
+      '• от 100.000 ₽ — около 10% часового дохода снимаемой суммы\n\n' +
       'Команды:\n' +
       '!банк положить [сумма/всё]\n' +
       '!банк снять [сумма/всё]',
@@ -243,8 +243,8 @@ async function deposit(context, rawAmount) {
     await context.send({
       message:
         '❌ На руках недостаточно денег.\n\n' +
-        `💵 На руках: ${formatMoney(result.balance)} $\n` +
-        `📉 Не хватает: ${formatMoney(result.missing)} $`,
+        `💵 На руках: ${formatMoney(result.balance)} ₽\n` +
+        `📉 Не хватает: ${formatMoney(result.missing)} ₽`,
       keyboard: createBankReturnKeyboard()
     });
 
@@ -264,9 +264,9 @@ async function deposit(context, rawAmount) {
   await context.send({
     message:
       '✅ Деньги положены в банк.\n\n' +
-      `➕ Вклад: ${formatMoney(result.amount)} $\n` +
-      `🏦 В банке: ${formatMoney(result.bankBalance)} $\n` +
-      `💵 На руках: ${formatMoney(result.balance)} $`,
+      `➕ Вклад: ${formatMoney(result.amount)} ₽\n` +
+      `🏦 В банке: ${formatMoney(result.bankBalance)} ₽\n` +
+      `💵 На руках: ${formatMoney(result.balance)} ₽`,
     keyboard: createBankKeyboard()
   });
 
@@ -312,8 +312,8 @@ async function requestWithdrawal(
     await context.send({
       message:
         '❌ На вкладе недостаточно денег.\n\n' +
-        `🏦 В банке: ${formatMoney(result.bankBalance)} $\n` +
-        `📉 Не хватает: ${formatMoney(result.missing)} $`,
+        `🏦 В банке: ${formatMoney(result.bankBalance)} ₽\n` +
+        `📉 Не хватает: ${formatMoney(result.missing)} ₽`,
       keyboard: createBankReturnKeyboard()
     });
 
@@ -341,15 +341,15 @@ async function requestWithdrawal(
   await context.send({
     message:
       '⚠ Подтверди снятие денег.\n\n' +
-      `➖ Сумма: ${formatMoney(result.amount)} $\n` +
+      `➖ Сумма: ${formatMoney(result.amount)} ₽\n` +
       `📊 Комиссия: ${formatPercentFromBps(result.commissionBps)}\n` +
-      `💸 Комиссия банка: ${formatMoney(result.commission)} $\n` +
+      `💸 Комиссия банка: ${formatMoney(result.commission)} ₽\n` +
       (
         result.commission > 0
           ? '🧾 Это около 10% часового дохода этой суммы.\n'
           : '🧾 Снятие без комиссии.\n'
       ) +
-      `💵 Получишь: ${formatMoney(result.payout)} $`,
+      `💵 Получишь: ${formatMoney(result.payout)} ₽`,
     keyboard:
       createWithdrawalConfirmationKeyboard(
         result.amount,
@@ -428,11 +428,11 @@ async function confirmWithdrawal(
   await context.send({
     message:
       '✅ Деньги сняты с вклада.\n\n' +
-      `➖ Списано из банка: ${formatMoney(result.amount)} $\n` +
-      `💸 Комиссия: ${formatMoney(result.commission)} $\n` +
-      `💵 Получено: ${formatMoney(result.payout)} $\n` +
-      `🏦 Осталось в банке: ${formatMoney(result.bankBalance)} $\n` +
-      `💰 На руках: ${formatMoney(result.balance)} $`,
+      `➖ Списано из банка: ${formatMoney(result.amount)} ₽\n` +
+      `💸 Комиссия: ${formatMoney(result.commission)} ₽\n` +
+      `💵 Получено: ${formatMoney(result.payout)} ₽\n` +
+      `🏦 Осталось в банке: ${formatMoney(result.bankBalance)} ₽\n` +
+      `💰 На руках: ${formatMoney(result.balance)} ₽`,
     keyboard: createBankKeyboard()
   });
 

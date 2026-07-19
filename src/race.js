@@ -5,12 +5,17 @@ const {
   formatMoney,
   getBalance,
   getMagazineAssets,
+  getCarTuningLevels,
   transferBalance
 } = require('./database');
 
 const {
   getItem
 } = require('./magazine/catalog');
+
+const {
+  calculateCarTuning
+} = require('./tuning/catalog');
 
 const INVITE_TIMEOUT = 2 * 60 * 1000;
 
@@ -62,7 +67,7 @@ function extractVkTarget(value) {
 function parseAmount(value) {
   const normalized = String(value ?? '')
     .trim()
-    .replace(/\$$/, '')
+    .replace(/[$₽]$/, '')
     .trim();
 
   if (!/^\d[\d\s.,_]*$/.test(normalized)) {
@@ -191,11 +196,54 @@ function getBestCar(vkId) {
     .filter(asset => asset.itemType === 'cars')
     .map(asset => getItem(asset.itemKey))
     .filter(Boolean)
+    .map(car => {
+      const tuning = getCarTuningLevels(
+        vkId,
+        car.key
+      );
+      const state = calculateCarTuning(
+        car,
+        tuning.levels
+      );
+
+      return {
+        ...car,
+        power: state.power,
+        raceRating: state.raceRating,
+        tuningSpent: state.totalSpent,
+        isStock: state.isStock
+      };
+    })
     .sort((first, second) =>
+      second.raceRating - first.raceRating ||
       second.price - first.price
     );
 
   return cars[0] ?? null;
+}
+
+function pickRaceWinner(
+  challengerCar,
+  opponentCar,
+  randomInt = crypto.randomInt
+) {
+  if (
+    challengerCar.raceRating >
+    opponentCar.raceRating
+  ) {
+    return 'challenger';
+  }
+
+  if (
+    opponentCar.raceRating >
+    challengerCar.raceRating
+  ) {
+    return 'opponent';
+  }
+
+  return randomInt(0, 2) === 0
+    ? 'challenger'
+    : 'opponent';
 }
 
 function createRaceKeyboard(raceId) {
@@ -274,9 +322,10 @@ async function sendUsage(context) {
     'Можно ответить на сообщение игрока:\n' +
     '!гонка 10.000\n\n' +
     '🚗 У обоих участников должна быть машина.\n' +
-    '🏎 Автоматически выбирается самая дорогая машина.\n' +
-    '🏆 Побеждает игрок с лучшей машиной.\n' +
-    '🎲 При равных машинах победитель определяется случайно.\n' +
+    '🏎 Автоматически выбирается машина с самым высоким гоночным рейтингом.\n' +
+    '🔧 На рейтинг влияют двигатель, турбины, Stage, трансмиссия, ходовая и выхлоп.\n' +
+    '🏆 Побеждает машина с более высоким рейтингом.\n' +
+    '🎲 При равном рейтинге победитель определяется случайно.\n' +
     '💵 Победитель получает ставку проигравшего.\n' +
     '⏳ Вызов действует 2 минуты.'
   );
@@ -374,8 +423,8 @@ async function createRace(
   if (challengerBalance < parsed.amount) {
     await context.send(
       '❌ У тебя недостаточно денег для этой ставки.\n\n' +
-      `💵 Ставка: ${formatMoney(parsed.amount)} $\n` +
-      `🏦 Баланс: ${formatMoney(challengerBalance)} $`
+      `💵 Ставка: ${formatMoney(parsed.amount)} ₽\n` +
+      `🏦 Баланс: ${formatMoney(challengerBalance)} ₽`
     );
 
     return true;
@@ -384,8 +433,8 @@ async function createRace(
   if (opponentBalance < parsed.amount) {
     await context.send(
       `❌ У @id${opponent.id} (${opponent.name}) недостаточно денег для этой ставки.\n\n` +
-      `💵 Требуется: ${formatMoney(parsed.amount)} $\n` +
-      `🏦 Баланс игрока: ${formatMoney(opponentBalance)} $`
+      `💵 Требуется: ${formatMoney(parsed.amount)} ₽\n` +
+      `🏦 Баланс игрока: ${formatMoney(opponentBalance)} ₽`
     );
 
     return true;
@@ -420,8 +469,12 @@ async function createRace(
   const invitation =
     `🏁 @id${challengerId} (${challengerName}) вызывает тебя на гонку!\n\n` +
     `🚗 Его машина: ${challengerCar.title}\n` +
+    `   🏁 Рейтинг: ${formatMoney(challengerCar.raceRating)}\n` +
+    `   🔧 Тюнинг: ${formatMoney(challengerCar.tuningSpent)} ₽\n` +
     `🚘 Твоя машина: ${opponentCar.title}\n` +
-    `💵 Ставка каждого: ${formatMoney(race.amount)} $\n\n` +
+    `   🏁 Рейтинг: ${formatMoney(opponentCar.raceRating)}\n` +
+    `   🔧 Тюнинг: ${formatMoney(opponentCar.tuningSpent)} ₽\n` +
+    `💵 Ставка каждого: ${formatMoney(race.amount)} ₽\n\n` +
     'Принять вызов?';
 
   try {
@@ -430,7 +483,9 @@ async function createRace(
         message:
           `🏁 Вызов на гонку отправлен!\n\n` +
           `@id${opponent.id} (${opponentName}), прими или отклони вызов.\n` +
-          `💵 Ставка: ${formatMoney(race.amount)} $`,
+          `🚗 ${challengerCar.title} — рейтинг ${formatMoney(challengerCar.raceRating)}\n` +
+          `🚘 ${opponentCar.title} — рейтинг ${formatMoney(opponentCar.raceRating)}\n` +
+          `💵 Ставка: ${formatMoney(race.amount)} ₽`,
         keyboard: createRaceKeyboard(race.id)
       });
     } else {
@@ -443,7 +498,7 @@ async function createRace(
 
       await context.send(
         `🏁 Вызов отправлен @id${opponent.id} (${opponentName}).\n` +
-        `💵 Ставка: ${formatMoney(race.amount)} $`
+        `💵 Ставка: ${formatMoney(race.amount)} ₽`
       );
     }
   } catch (error) {
@@ -557,17 +612,14 @@ async function acceptRace(context, vk, race) {
     return true;
   }
 
-  let winnerId;
-
-  if (challengerCar.price > opponentCar.price) {
-    winnerId = race.challengerId;
-  } else if (opponentCar.price > challengerCar.price) {
-    winnerId = race.opponentId;
-  } else {
-    winnerId = crypto.randomInt(0, 2) === 0
+  const winnerSide = pickRaceWinner(
+    challengerCar,
+    opponentCar
+  );
+  const winnerId =
+    winnerSide === 'challenger'
       ? race.challengerId
       : race.opponentId;
-  }
 
   const loserId = winnerId === race.challengerId
     ? race.opponentId
@@ -608,8 +660,9 @@ async function acceptRace(context, vk, race) {
   const loserCar = loserId === race.challengerId
     ? challengerCar
     : opponentCar;
-  const equalCars =
-    challengerCar.price === opponentCar.price;
+  const equalRating =
+    challengerCar.raceRating ===
+    opponentCar.raceRating;
 
   deleteRace(race);
 
@@ -618,14 +671,18 @@ async function acceptRace(context, vk, race) {
     race,
     '🏁 Гонка завершена!\n\n' +
     `🚗 @id${winnerId} (${winnerName}): ${winnerCar.title}\n` +
+    `   ⚡ ${formatMoney(winnerCar.power)} л.с. · 🏁 ${formatMoney(winnerCar.raceRating)}\n` +
+    `   🔧 Тюнинг: ${formatMoney(winnerCar.tuningSpent)} ₽\n` +
     `🚙 @id${loserId} (${loserName}): ${loserCar.title}\n` +
-    (equalCars
-      ? '🎲 Машины равны — победителя определил случай.\n\n'
-      : '⚡ Более дорогая машина оказалась быстрее.\n\n') +
+    `   ⚡ ${formatMoney(loserCar.power)} л.с. · 🏁 ${formatMoney(loserCar.raceRating)}\n` +
+    `   🔧 Тюнинг: ${formatMoney(loserCar.tuningSpent)} ₽\n` +
+    (equalRating
+      ? '🎲 Рейтинг машин равен — победителя определил случай.\n\n'
+      : '⚡ Более высокий гоночный рейтинг принёс победу.\n\n') +
     `🏆 Победитель: @id${winnerId} (${winnerName})\n` +
-    `💵 Выигрыш: +${formatMoney(race.amount)} $\n` +
-    `🏦 Баланс победителя: ${formatMoney(transferResult.recipientBalance)} $\n` +
-    `💸 Баланс проигравшего: ${formatMoney(transferResult.senderBalance)} $`
+    `💵 Выигрыш: +${formatMoney(race.amount)} ₽\n` +
+    `🏦 Баланс победителя: ${formatMoney(transferResult.recipientBalance)} ₽\n` +
+    `💸 Баланс проигравшего: ${formatMoney(transferResult.senderBalance)} ₽`
   );
 
   return true;
@@ -718,5 +775,7 @@ async function handle(context, vk) {
 }
 
 module.exports = {
-  handle
+  handle,
+  getBestCar,
+  pickRaceWinner
 };

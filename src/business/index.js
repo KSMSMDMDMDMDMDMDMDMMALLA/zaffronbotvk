@@ -321,8 +321,8 @@ async function sendBusinessHome(
 
       return (
         `${page * BUSINESS_PAGE_SIZE + index + 1}. ${item.title}\n` +
-        `   📈 Доход: ${formatMoney(state.incomePerHour)} $/час\n` +
-        `   💰 Накоплено: ${formatMoney(state.availableIncome)} $\n` +
+        `   📈 Доход: ${formatMoney(state.incomePerHour)} ₽/час\n` +
+        `   💰 Накоплено: ${formatMoney(state.availableIncome)} ₽\n` +
         `   ⚙ Множитель: ${formatMultiplier(state.multiplier)}`
       );
     }
@@ -383,7 +383,7 @@ async function openBusiness(context, itemKey) {
         getBusinessMultiplier(
           state.upgradeLevel + 1
         )
-      )} за ${formatMoney(nextCost)} $`
+      )} за ${formatMoney(nextCost)} ₽`
     );
 
   await context.send({
@@ -391,9 +391,9 @@ async function openBusiness(context, itemKey) {
       `🏢 ${item.title}\n\n` +
       `⚙ Улучшение: ${state.upgradeLevel}/${BUSINESS_MAX_UPGRADE_LEVEL}\n` +
       `📊 Множитель: ${formatMultiplier(state.multiplier)}\n` +
-      `📈 Заработок в час: ${formatMoney(state.incomePerHour)} $\n` +
-      `💰 Накоплено: ${formatMoney(state.availableIncome)} $\n` +
-      `💵 Всего снято: ${formatMoney(state.totalEarned)} $\n\n` +
+      `📈 Заработок в час: ${formatMoney(state.incomePerHour)} ₽\n` +
+      `💰 Накоплено: ${formatMoney(state.availableIncome)} ₽\n` +
+      `💵 Всего снято: ${formatMoney(state.totalEarned)} ₽\n\n` +
       upgradeText,
     keyboard: createBusinessKeyboard(
       item,
@@ -448,8 +448,8 @@ async function collectIncome(context, itemKey) {
     message:
       '💰 Доход снят!\n\n' +
       `🏢 Бизнес: ${item.title}\n` +
-      `💵 Получено: ${formatMoney(result.payout)} $\n` +
-      `🏦 Баланс: ${formatMoney(result.balance)} $`,
+      `💵 Получено: ${formatMoney(result.payout)} ₽\n` +
+      `🏦 Баланс: ${formatMoney(result.balance)} ₽`,
     keyboard: createBusinessKeyboard(
       item,
       state
@@ -501,8 +501,8 @@ async function collectAllIncome(context) {
     message:
       '💰 Вся выручка собрана!\n\n' +
       `🏢 Бизнесов с доходом: ${result.businessCount}\n` +
-      `💵 Получено: ${formatMoney(result.payout)} $\n` +
-      `🏦 Баланс: ${formatMoney(result.balance)} $`,
+      `💵 Получено: ${formatMoney(result.payout)} ₽\n` +
+      `🏦 Баланс: ${formatMoney(result.balance)} ₽`,
     keyboard: createBusinessHomeKeyboard()
   });
 
@@ -558,9 +558,9 @@ async function improveBusiness(context, itemKey) {
     await context.send({
       message:
         '❌ Не хватает денег на улучшение.\n\n' +
-        `💵 Цена: ${formatMoney(result.price)} $\n` +
-        `🏦 Баланс: ${formatMoney(result.balance)} $\n` +
-        `📉 Не хватает: ${formatMoney(result.missing)} $`,
+        `💵 Цена: ${formatMoney(result.price)} ₽\n` +
+        `🏦 Баланс: ${formatMoney(result.balance)} ₽\n` +
+        `📉 Не хватает: ${formatMoney(result.missing)} ₽`,
       keyboard: createBusinessKeyboard(
         item,
         currentState
@@ -581,9 +581,9 @@ async function improveBusiness(context, itemKey) {
       '⬆ Бизнес улучшен!\n\n' +
       `🏢 ${item.title}\n` +
       `📊 Новый множитель: ${formatMultiplier(result.multiplier)}\n` +
-      `📈 Новый доход: ${formatMoney(result.incomePerHour)} $/час\n` +
-      `💵 Потрачено: ${formatMoney(result.price)} $\n` +
-      `🏦 Баланс: ${formatMoney(result.balance)} $`,
+      `📈 Новый доход: ${formatMoney(result.incomePerHour)} ₽/час\n` +
+      `💵 Потрачено: ${formatMoney(result.price)} ₽\n` +
+      `🏦 Баланс: ${formatMoney(result.balance)} ₽`,
     keyboard: createBusinessKeyboard(
       item,
       newState
@@ -629,12 +629,12 @@ async function requestBusinessSale(
     message:
       '⚠ Продать бизнес?\n\n' +
       `🏢 ${item.title}\n` +
-      `💳 Всего вложено: ${formatMoney(invested)} $\n` +
-      `💸 Возврат 70%: ${formatMoney(resaleValue)} $\n` +
-      `💰 Накопленный доход: ${formatMoney(state.availableIncome)} $\n` +
+      `💳 Всего вложено: ${formatMoney(invested)} ₽\n` +
+      `💸 Возврат 70%: ${formatMoney(resaleValue)} ₽\n` +
+      `💰 Накопленный доход: ${formatMoney(state.availableIncome)} ₽\n` +
       `🏦 Получишь сейчас: ${formatMoney(
         resaleValue + state.availableIncome
-      )} $\n\n` +
+      )} ₽\n\n` +
       'После продажи улучшения будут потеряны.',
     keyboard:
       createSellConfirmationKeyboard(item)
@@ -681,10 +681,10 @@ async function confirmBusinessSale(
     message:
       '✅ Бизнес продан.\n\n' +
       `🏢 ${item.title}\n` +
-      `💸 За имущество: ${formatMoney(result.resaleValue)} $\n` +
-      `💰 Накопленный доход: ${formatMoney(result.income)} $\n` +
-      `🏦 Получено всего: ${formatMoney(result.payout)} $\n` +
-      `💵 Баланс: ${formatMoney(result.balance)} $`,
+      `💸 За имущество: ${formatMoney(result.resaleValue)} ₽\n` +
+      `💰 Накопленный доход: ${formatMoney(result.income)} ₽\n` +
+      `🏦 Получено всего: ${formatMoney(result.payout)} ₽\n` +
+      `💵 Баланс: ${formatMoney(result.balance)} ₽`,
     keyboard: createBusinessHomeKeyboard()
   });
 

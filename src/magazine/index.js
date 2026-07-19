@@ -5,6 +5,7 @@ const {
   getBalance,
   getMagazineAssets,
   getJobBoostCount,
+  getCarTuningLevels,
   purchaseMagazineItem,
   sellMagazineAsset
 } = require('../database');
@@ -15,8 +16,12 @@ const {
   getItem
 } = require('./catalog');
 
+const {
+  calculateCarTuning
+} = require('../tuning/catalog');
+
 const CATEGORY_PAGE_SIZE = 7;
-const ASSET_PAGE_SIZE = 7;
+const ASSET_PAGE_SIZE = 6;
 const ASSET_RESALE_PERCENT = 70;
 
 function createCategoriesKeyboard() {
@@ -171,6 +176,32 @@ function createPurchaseKeyboard(
     const item = getItem(ownedItemKey);
 
     if (item && !item.consumable) {
+      if (item.categoryKey === 'houses') {
+        keyboard
+          .textButton({
+            label: '🏘 Сдать в аренду',
+            payload: {
+              command: 'rental_open',
+              itemKey: item.key
+            },
+            color: Keyboard.POSITIVE_COLOR
+          })
+          .row();
+      }
+
+      if (item.categoryKey === 'cars') {
+        keyboard
+          .textButton({
+            label: '🔧 Открыть тюнинг',
+            payload: {
+              command: 'tuning_car',
+              carKey: item.key
+            },
+            color: Keyboard.POSITIVE_COLOR
+          })
+          .row();
+      }
+
       keyboard.textButton({
         label: '💸 Продать имущество',
         payload: {
@@ -272,6 +303,34 @@ function createAssetsKeyboard(items, page) {
     });
   }
 
+  if (items.some(item =>
+    item.categoryKey === 'houses'
+  )) {
+    keyboard
+      .row()
+      .textButton({
+        label: '🏘 Аренда жилья',
+        payload: {
+          command: 'rental_home'
+        },
+        color: Keyboard.POSITIVE_COLOR
+      });
+  }
+
+  if (items.some(item =>
+    item.categoryKey === 'cars'
+  )) {
+    keyboard
+      .row()
+      .textButton({
+        label: '🔧 Тюнинг машин',
+        payload: {
+          command: 'tuning_home'
+        },
+        color: Keyboard.PRIMARY_COLOR
+      });
+  }
+
   return keyboard.inline();
 }
 
@@ -321,7 +380,27 @@ function getProfileText(vkId) {
     const items =
       itemsByCategory.get(item.categoryKey) ?? [];
 
-    items.push(item.title);
+    if (item.categoryKey === 'cars') {
+      const tuning = getCarTuningLevels(
+        vkId,
+        item.key
+      );
+      const state = calculateCarTuning(
+        item,
+        tuning.levels
+      );
+
+      items.push(
+        state.isStock
+          ? `${item.title} (сток)`
+          : (
+            `${item.title} ` +
+            `(тюнинг ${formatMoney(state.totalSpent)} ₽)`
+          )
+      );
+    } else {
+      items.push(item.title);
+    }
     itemsByCategory.set(
       item.categoryKey,
       items
@@ -367,9 +446,11 @@ async function sendHome(context) {
   await context.send({
     message:
       '🛒 Магазин Zaffron\n\n' +
-      `💵 Твой баланс: ${formatMoney(balance)} $\n\n` +
+      `💵 Твой баланс: ${formatMoney(balance)} ₽\n\n` +
       `${categoryLines.join('\n')}\n\n` +
       '📦 !имущество — продать купленное имущество\n\n' +
+      '🏘 !аренда — сдавать квартиры и дома\n\n' +
+      '🔧 !тюнинг — улучшать машины для гонок\n\n' +
       'Выбери раздел кнопкой или командой.\n' +
       'Покупка текстом: !купить [название товара]',
     keyboard: createCategoriesKeyboard()
@@ -414,14 +495,31 @@ async function sendAssets(
     (item, index) => {
       const category =
         getCategory(item.categoryKey);
+      let tuningText = '';
+
+      if (item.categoryKey === 'cars') {
+        const tuning = getCarTuningLevels(
+          vkId,
+          item.key
+        );
+        const state = calculateCarTuning(
+          item,
+          tuning.levels
+        );
+
+        tuningText =
+          `\n   🔧 Тюнинг: ${formatMoney(state.totalSpent)} ₽` +
+          `\n   🏁 Рейтинг: ${formatMoney(state.raceRating)}`;
+      }
 
       return (
         `${page * ASSET_PAGE_SIZE + index + 1}. ` +
         `${category?.emoji ?? '📦'} ${item.title}\n` +
-        `   💵 Цена покупки: ${formatMoney(item.price)} $\n` +
+        `   💵 Цена покупки: ${formatMoney(item.price)} ₽\n` +
         `   💸 Продажа: ${formatMoney(
           getAssetResaleValue(item)
-        )} $`
+        )} ₽` +
+        tuningText
       );
     }
   );
@@ -434,6 +532,8 @@ async function sendAssets(
         : '') +
       `${lines.join('\n\n')}\n\n` +
       `При продаже возвращается ${ASSET_RESALE_PERCENT}% стоимости.\n` +
+      'Жильё можно сдавать через !аренда.\n' +
+      'Машины улучшаются через !тюнинг.\n' +
       'Выбери имущество кнопкой.',
     keyboard: createAssetsKeyboard(
       items,
@@ -490,13 +590,19 @@ async function requestAssetSale(
 
   const resaleValue =
     getAssetResaleValue(item);
+  const tuningWarning =
+    item.categoryKey === 'cars'
+      ? '\n⚠ Весь установленный тюнинг будет потерян.\n'
+      : '';
 
   await context.send({
     message:
       '⚠ Продать имущество?\n\n' +
       `📦 ${item.title}\n` +
-      `💵 Цена покупки: ${formatMoney(item.price)} $\n` +
-      `💸 Получишь: ${formatMoney(resaleValue)} $\n\n` +
+      `💵 Цена покупки: ${formatMoney(item.price)} ₽\n` +
+      `💸 Получишь: ${formatMoney(resaleValue)} ₽\n` +
+      tuningWarning +
+      '\n' +
       'После продажи имущество исчезнет из профиля.',
     keyboard:
       createSaleConfirmationKeyboard(item)
@@ -550,8 +656,8 @@ async function confirmAssetSale(
     message:
       '✅ Имущество продано!\n\n' +
       `📦 ${item.title}\n` +
-      `💸 Получено: ${formatMoney(result.resaleValue)} $\n` +
-      `🏦 Баланс: ${formatMoney(result.balance)} $`,
+      `💸 Получено: ${formatMoney(result.resaleValue)} ₽\n` +
+      `🏦 Баланс: ${formatMoney(result.balance)} ₽`,
     keyboard: createAssetsReturnKeyboard()
   });
 
@@ -613,7 +719,7 @@ async function sendCategory(
 
       return (
         `${page * CATEGORY_PAGE_SIZE + index + 1}. ${item.title}\n` +
-        `   💵 ${formatMoney(item.price)} $` +
+        `   💵 ${formatMoney(item.price)} ₽` +
         description +
         status
       );
@@ -678,9 +784,9 @@ async function buyItem(context, itemValue) {
       message:
         '❌ Недостаточно денег.\n\n' +
         `🛒 Товар: ${item.title}\n` +
-        `💵 Цена: ${formatMoney(result.price)} $\n` +
-        `🏦 Баланс: ${formatMoney(result.balance)} $\n` +
-        `📉 Не хватает: ${formatMoney(result.missing)} $`,
+        `💵 Цена: ${formatMoney(result.price)} ₽\n` +
+        `🏦 Баланс: ${formatMoney(result.balance)} ₽\n` +
+        `📉 Не хватает: ${formatMoney(result.missing)} ₽`,
       keyboard: createPurchaseKeyboard(
         item.categoryKey
       )
@@ -695,14 +801,18 @@ async function buyItem(context, itemValue) {
       'Буст автоматически сработает после следующей смены.'
     : item.categoryKey === 'businesses'
       ? '\n🏢 Бизнес начал приносить доход.'
-      : '\n📦 Товар добавлен в имущество профиля.';
+      : item.categoryKey === 'houses'
+        ? '\n🏘 Жильё можно сдать в аренду командой !аренда.'
+        : item.categoryKey === 'cars'
+          ? '\n🔧 Машину можно улучшить командой !тюнинг.'
+          : '\n📦 Товар добавлен в имущество профиля.';
 
   await context.send({
     message:
       '✅ Покупка совершена!\n\n' +
       `🛒 ${item.title}\n` +
-      `💵 Списано: ${formatMoney(result.price)} $\n` +
-      `🏦 Баланс: ${formatMoney(result.balance)} $` +
+      `💵 Списано: ${formatMoney(result.price)} ₽\n` +
+      `🏦 Баланс: ${formatMoney(result.balance)} ₽` +
       boostText,
     keyboard: createPurchaseKeyboard(
       item.categoryKey,

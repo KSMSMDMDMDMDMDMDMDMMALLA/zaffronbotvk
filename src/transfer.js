@@ -1,7 +1,19 @@
 const {
   formatMoney,
+  TRANSFER_DAILY_LIMIT,
   transferBalance
 } = require('./database');
+
+function formatResetTime(value) {
+  return new Intl.DateTimeFormat(
+    'ru-RU',
+    {
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: 'Europe/Moscow'
+    }
+  ).format(new Date(value));
+}
 
 function getReplySenderId(context) {
   const reply = context.replyMessage;
@@ -43,7 +55,7 @@ function extractVkTarget(value) {
 function parseAmount(value) {
   const normalized = String(value ?? '')
     .trim()
-    .replace(/\$$/, '')
+    .replace(/[$₽]$/, '')
     .trim();
 
   if (!/^\d[\d\s.,_]*$/.test(normalized)) {
@@ -113,7 +125,11 @@ async function resolveRecipient(
     const target =
       extractVkTarget(rawTarget);
 
-    if (!target || target === '$') {
+    if (
+      !target ||
+      target === '$' ||
+      target === '₽'
+    ) {
       return null;
     }
 
@@ -178,9 +194,10 @@ async function sendUsage(context) {
   await context.send(
     '❌ Укажи сумму и получателя.\n\n' +
     'По username:\n' +
-    '!передать 10.000 $ @username\n\n' +
+    '!передать 10.000 ₽ @username\n\n' +
     'Или ответь на сообщение командой:\n' +
-    '!передать 10.000 $'
+    '!передать 10.000 ₽\n\n' +
+    `📤 Суточный лимит: ${formatMoney(TRANSFER_DAILY_LIMIT)} ₽`
   );
 
   return true;
@@ -255,15 +272,28 @@ async function handle(context, vk) {
   const result = transferBalance({
     senderId,
     recipientId: recipient.id,
-    amount: parsed.amount
+    amount: parsed.amount,
+    enforceDailyLimit: true
   });
 
   if (result.status === 'insufficient_funds') {
     await context.send(
       '❌ Недостаточно денег для перевода.\n\n' +
-      `💵 Сумма: ${formatMoney(result.amount)} $\n` +
-      `🏦 Баланс: ${formatMoney(result.balance)} $\n` +
-      `📉 Не хватает: ${formatMoney(result.missing)} $`
+      `💵 Сумма: ${formatMoney(result.amount)} ₽\n` +
+      `🏦 Баланс: ${formatMoney(result.balance)} ₽\n` +
+      `📉 Не хватает: ${formatMoney(result.missing)} ₽`
+    );
+
+    return true;
+  }
+
+  if (result.status === 'daily_limit') {
+    await context.send(
+      '⏳ Суточный лимит переводов превышен.\n\n' +
+      `🔒 Лимит: ${formatMoney(result.limit)} ₽\n` +
+      `📤 Уже отправлено: ${formatMoney(result.used)} ₽\n` +
+      `✅ Доступно сегодня: ${formatMoney(result.remaining)} ₽\n` +
+      `🕛 Сброс: ${formatResetTime(result.resetAt)} МСК`
     );
 
     return true;
@@ -280,8 +310,10 @@ async function handle(context, vk) {
   await context.send(
     '💸 Перевод выполнен!\n\n' +
     `👤 Получатель: @id${recipient.id} (${recipient.name})\n` +
-    `💵 Передано: ${formatMoney(result.amount)} $\n` +
-    `🏦 Твой баланс: ${formatMoney(result.senderBalance)} $`
+    `💵 Передано: ${formatMoney(result.amount)} ₽\n` +
+    `🏦 Твой баланс: ${formatMoney(result.senderBalance)} ₽\n` +
+    `📤 Остаток лимита сегодня: ${formatMoney(result.dailyRemaining)} ₽\n` +
+    `🕛 Сброс: ${formatResetTime(result.dailyResetAt)} МСК`
   );
 
   return true;

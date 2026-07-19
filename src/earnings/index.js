@@ -169,8 +169,8 @@ async function sendBeginnerBox(context) {
       `Доступна игрокам 1–${BEGINNER_BOX_MAX_LEVEL} уровня.\n` +
       'Выбери одну из трёх коробок — награда ' +
       'определится только после нажатия.\n\n' +
-      '💵 Обычная награда: 1.000–15.000 $\n' +
-      '💎 Шанс джекпота 50.000 $: 1%\n' +
+      '💵 Обычная награда: 1.000–15.000 ₽\n' +
+      '💎 Шанс джекпота 50.000 ₽: 1%\n' +
       `⏳ Новая попытка: раз в ${BEGINNER_BOX_COOLDOWN_MS / 60000} минут`,
     keyboard: createBoxesKeyboard()
   });
@@ -240,21 +240,21 @@ async function openBeginnerBox(
 
   const debtLines = result.debtPaid > 0
     ? [
-      `💳 Погашено долга: ${formatMoney(result.debtPaid)} $`,
-      `💵 Зачислено на баланс: ${formatMoney(result.credited)} $`
+      `💳 Погашено долга: ${formatMoney(result.debtPaid)} ₽`,
+      `💵 Зачислено на баланс: ${formatMoney(result.credited)} ₽`
     ]
     : [];
 
   await context.send(
     `📦 Ты открыл коробку №${boxNumber}!\n\n` +
     `${prize.emoji} ${prize.title}\n` +
-    `💰 Награда: ${formatMoney(result.reward)} $\n` +
+    `💰 Награда: ${formatMoney(result.reward)} ₽\n` +
     (
       debtLines.length > 0
         ? `${debtLines.join('\n')}\n`
         : ''
     ) +
-    `🏦 Баланс: ${formatMoney(result.balance)} $\n\n` +
+    `🏦 Баланс: ${formatMoney(result.balance)} ₽\n\n` +
     '⏳ Следующая коробка будет доступна через 10 минут.'
   );
 

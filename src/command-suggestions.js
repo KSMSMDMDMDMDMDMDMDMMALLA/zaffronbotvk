@@ -19,6 +19,16 @@ const COMMANDS = Object.freeze([
     acceptsArguments: true
   },
   { command: '!имущество', usage: '!имущество' },
+  {
+    command: '!аренда',
+    usage: '!аренда [название жилья]',
+    acceptsArguments: true
+  },
+  {
+    command: '!сдать',
+    usage: '!сдать [название жилья]',
+    acceptsArguments: true
+  },
   { command: '!бизнес', usage: '!бизнес' },
   { command: '!банк', usage: '!банк' },
   {
@@ -34,6 +44,15 @@ const COMMANDS = Object.freeze([
   { command: '!коробка', usage: '!коробка' },
   { command: '!рыбачить', usage: '!рыбачить' },
   { command: '!улов', usage: '!улов' },
+  { command: '!ферма', usage: '!ферма' },
+  {
+    command: '!семена',
+    usage: '!ферма семена'
+  },
+  {
+    command: '!склад',
+    usage: '!ферма склад'
+  },
   { command: '!квесты', usage: '!квесты' },
   { command: '!работы', usage: '!работы' },
   {
@@ -81,6 +100,12 @@ const COMMANDS = Object.freeze([
     usage: '!гонка [username] [ставка]',
     acceptsArguments: true
   },
+  {
+    command: '!тюнинг',
+    usage: '!тюнинг [название машины]',
+    acceptsArguments: true
+  },
+  { command: '!гараж', usage: '!гараж' },
   {
     command: '!обнять',
     usage: '!обнять [реплай]',

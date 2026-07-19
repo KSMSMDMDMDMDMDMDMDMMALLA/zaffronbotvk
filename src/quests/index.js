@@ -226,7 +226,7 @@ function buildRewardLines(result) {
 
   if (result.dollars > 0) {
     lines.push(
-      `💵 Деньги: +${formatMoney(result.dollars)} $`
+      `💵 Деньги: +${formatMoney(result.dollars)} ₽`
     );
   }
 
@@ -262,13 +262,13 @@ function buildRewardLines(result) {
     } else {
       lines.push(
         `📦 ${result.asset.title} уже есть`,
-        `💰 Компенсация 70%: +${formatMoney(result.asset.compensation)} $`
+        `💰 Компенсация 70%: +${formatMoney(result.asset.compensation)} ₽`
       );
     }
   }
 
   lines.push(
-    `🏦 Баланс: ${formatMoney(result.balance)} $`,
+    `🏦 Баланс: ${formatMoney(result.balance)} ₽`,
     `⭐ Уровень: ${result.level}`,
     `✨ Аура: ${result.totalAura}`
   );

@@ -120,7 +120,7 @@ function buildWidgetCode(top, usersById) {
         url: `https://vk.ru/id${item.vkId}`
       },
       {
-        text: `${formatMoney(item.balance)} $`
+        text: `${formatMoney(item.balance)} ₽`
       }
     ];
   });
@@ -129,7 +129,7 @@ function buildWidgetCode(top, usersById) {
     body.push([
       { text: '—' },
       { text: 'Игроков пока нет' },
-      { text: '0 $' }
+      { text: '0 ₽' }
     ]);
   }
 
