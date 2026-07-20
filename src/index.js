@@ -7,7 +7,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const axios = require('axios');
-const googleTts = require('google-tts-api');
 const {
   Keyboard,
   VK
@@ -22,10 +21,12 @@ const farm = require('./farm');
 const fishing = require('./fishing');
 const games = require('./games2');
 const jobs = require('./jobs');
+const lootCases = require('./loot-cases');
 const magazine = require('./magazine');
 const meme = require('./meme');
 const memduel = require('./memduel');
 const other = require('./other');
+const phone = require('./phone');
 const photo = require('./photo');
 const promo = require('./promo');
 const quests = require('./quests');
@@ -35,6 +36,10 @@ const roleplay = require('./rp');
 const transfer = require('./transfer');
 const travel = require('./travel');
 const tuning = require('./tuning');
+const {
+  MAX_VOICE_TEXT_LENGTH,
+  createVoiceAttachment
+} = require('./voice');
 const communityWidget = require('./community-widget');
 const {
   getCommandSuggestion
@@ -62,7 +67,6 @@ const USER_TRACK_INTERVAL_MS =
   5 * 60 * 1000;
 const USER_REFRESH_INTERVAL_MS =
   24 * 60 * 60 * 1000;
-const MAX_SPEECH_LENGTH = 200;
 const MAX_WIKI_EXTRACT_LENGTH = 1100;
 
 const bannerPaths = Object.freeze({
@@ -88,6 +92,7 @@ const userTrackTimes = new Map();
 
 const commandHandlers = [
   admin,
+  phone,
   memduel,
   meme,
   photo,
@@ -99,6 +104,7 @@ const commandHandlers = [
   tuning,
   jobs,
   earnings,
+  lootCases,
   games,
   farm,
   bank,
@@ -421,6 +427,8 @@ function getCommandsSectionText(section) {
       '💸 !передать — перевод (до 5.000.000 ₽/день)\n' +
       '🏆 !топ баланс\n' +
       '🎟 !promo — промокод\n' +
+      '📱 !телефон — телефон и звонки\n' +
+      '🎁 !кейсы — платные кейсы и склад лута\n' +
       '📋 !команды — разделы',
     earnings:
       '💵 Заработок\n\n' +
@@ -450,11 +458,21 @@ function getCommandsSectionText(section) {
       '🎰 !казино [ставка]\n' +
       '🏁 !гонка — вызов\n' +
       '🔧 !тюнинг — гараж машин\n' +
-      '🤗 !обнять [реплай]\n' +
-      '💋 !поцеловать [реплай]\n' +
-      '🫂 !погладить [реплай]\n' +
-      '🙌 !дать пять [реплай]\n' +
-      '😉 !подмигнуть [реплай]\n' +
+      '🤗 !обнять\n' +
+      '💋 !поцеловать\n' +
+      '🫶 !погладить\n' +
+      '🙌 !дать пять\n' +
+      '😉 !подмигнуть\n' +
+      '🤝 !пожать руку\n' +
+      '🌟 !похвалить\n' +
+      '💙 !поддержать\n' +
+      '😂 !рассмешить\n' +
+      '🍕 !угостить\n' +
+      '💐 !подарить цветы\n' +
+      '💃 !потанцевать\n' +
+      '👻 !напугать\n' +
+      '📸 !сфотографироваться\n' +
+      '🍀 !пожелать удачи\n' +
       '🎯 !угадай',
     other:
       '📄 Прочее\n\n' +
@@ -705,37 +723,19 @@ async function handleSay(context, vk, rawText) {
     return true;
   }
 
-  if (text.length > MAX_SPEECH_LENGTH) {
+  if (text.length > MAX_VOICE_TEXT_LENGTH) {
     await context.send(
-      `❌ Максимум ${MAX_SPEECH_LENGTH} символов.`
+      `❌ Максимум ${MAX_VOICE_TEXT_LENGTH} символов.`
     );
 
     return true;
   }
 
   try {
-    const audioUrl = googleTts.getAudioUrl(text, {
-      lang: 'ru',
-      slow: false,
-      host: 'https://translate.google.com'
-    });
-    const response = await axios.get(audioUrl, {
-      responseType: 'arraybuffer',
-      timeout: 20000
-    });
-    const audio = Buffer.from(response.data);
-
-    if (audio.length === 0) {
-      throw new Error('Google TTS вернул пустой файл');
-    }
-
-    const attachment = await vk.upload.audioMessage({
-      peer_id: Number(context.peerId),
-      source: {
-        value: audio,
-        filename: 'zaffron-voice.mp3',
-        contentType: 'audio/mpeg'
-      }
+    const attachment = await createVoiceAttachment({
+      vk,
+      peerId: Number(context.peerId),
+      text
     });
 
     await context.send({

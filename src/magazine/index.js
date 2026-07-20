@@ -5,6 +5,7 @@ const {
   getBalance,
   getMagazineAssets,
   getJobBoostCount,
+  getDailyJobBoostPurchaseUsage,
   getCarTuningLevels,
   purchaseMagazineItem,
   sellMagazineAsset
@@ -196,6 +197,18 @@ function createPurchaseKeyboard(
             payload: {
               command: 'tuning_car',
               carKey: item.key
+            },
+            color: Keyboard.POSITIVE_COLOR
+          })
+          .row();
+      }
+
+      if (item.categoryKey === 'phones') {
+        keyboard
+          .textButton({
+            label: '📱 Открыть телефон',
+            payload: {
+              command: 'phone_home'
             },
             color: Keyboard.POSITIVE_COLOR
           })
@@ -594,6 +607,10 @@ async function requestAssetSale(
     item.categoryKey === 'cars'
       ? '\n⚠ Весь установленный тюнинг будет потерян.\n'
       : '';
+  const phoneWarning =
+    item.categoryKey === 'phones'
+      ? '\n⚠ SIM-карта и выпавший номер будут удалены. Номер снова сможет выпасть другому игроку.\n'
+      : '';
 
   await context.send({
     message:
@@ -602,6 +619,7 @@ async function requestAssetSale(
       `💵 Цена покупки: ${formatMoney(item.price)} ₽\n` +
       `💸 Получишь: ${formatMoney(resaleValue)} ₽\n` +
       tuningWarning +
+      phoneWarning +
       '\n' +
       'После продажи имущество исчезнет из профиля.',
     keyboard:
@@ -657,7 +675,10 @@ async function confirmAssetSale(
       '✅ Имущество продано!\n\n' +
       `📦 ${item.title}\n` +
       `💸 Получено: ${formatMoney(result.resaleValue)} ₽\n` +
-      `🏦 Баланс: ${formatMoney(result.balance)} ₽`,
+      `🏦 Баланс: ${formatMoney(result.balance)} ₽` +
+      (item.categoryKey === 'phones'
+        ? '\n📵 SIM-карта и номер удалены — можно ловить новый.'
+        : ''),
     keyboard: createAssetsReturnKeyboard()
   });
 
@@ -686,6 +707,10 @@ async function sendCategory(
     getOwnedItemKeys(vkId);
   const boostCount =
     getJobBoostCount(vkId);
+  const dailyBoostPurchase =
+    category.key === 'boosts'
+      ? getDailyJobBoostPurchaseUsage(vkId)
+      : null;
 
   const totalPages = Math.max(
     1,
@@ -708,7 +733,12 @@ async function sendCategory(
       let status = '';
 
       if (item.consumable) {
-        status = `\n   🎫 Куплено бустов: ${boostCount}`;
+        status =
+          `\n   🎫 Бустов в запасе: ${boostCount}` +
+          (dailyBoostPurchase
+            ? `\n   🗓 Куплено сегодня: ${dailyBoostPurchase.purchased}/${dailyBoostPurchase.limit}` +
+              ` (осталось ${dailyBoostPurchase.remaining})`
+            : '');
       } else if (ownedItemKeys.has(item.key)) {
         status = '\n   ✅ Уже куплено';
       }
@@ -779,6 +809,23 @@ async function buyItem(context, itemValue) {
     return true;
   }
 
+  if (result.status === 'daily_limit') {
+    await context.send({
+      message:
+        '⏳ Дневной лимит покупки бустов исчерпан.\n\n' +
+        `⚡ Можно купить: ${result.limit} бустов x2 в день\n` +
+        `🛒 Куплено сегодня: ${result.purchased}\n` +
+        `🎫 Бустов в запасе: ${result.boostCount}\n` +
+        '🕛 Сброс лимита: в 00:00 МСК',
+      keyboard: createPurchaseKeyboard(
+        item.categoryKey,
+        item.key
+      )
+    });
+
+    return true;
+  }
+
   if (result.status === 'insufficient_funds') {
     await context.send({
       message:
@@ -798,6 +845,8 @@ async function buyItem(context, itemValue) {
   const boostText = item.consumable
     ? `\n⚡ Куплено бустов: ${item.quantity ?? 1}\n` +
       `🎫 Бустов в запасе: ${result.boostCount}\n` +
+      `🗓 Куплено сегодня: ${result.purchasedToday}/${result.dailyPurchaseLimit}\n` +
+      `✅ Можно купить ещё сегодня: ${result.dailyPurchaseRemaining}\n` +
       'Буст автоматически сработает после следующей смены.'
     : item.categoryKey === 'businesses'
       ? '\n🏢 Бизнес начал приносить доход.'
@@ -805,6 +854,8 @@ async function buyItem(context, itemValue) {
         ? '\n🏘 Жильё можно сдать в аренду командой !аренда.'
         : item.categoryKey === 'cars'
           ? '\n🔧 Машину можно улучшить командой !тюнинг.'
+          : item.categoryKey === 'phones'
+            ? '\n📲 Открой !телефон и купи SIM-карту.'
           : '\n📦 Товар добавлен в имущество профиля.';
 
   await context.send({

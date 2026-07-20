@@ -1,5 +1,6 @@
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
+const FARM_MIN_GROW_TIME_MS = 12 * HOUR_MS;
 
 const FARM_MAX_PLOTS = 8;
 const FARM_MAX_UPGRADE_LEVEL = 5;
@@ -34,7 +35,7 @@ const CROPS = Object.freeze([
     requiredPlots: 1,
     seedPrice: 500,
     sellPrice: 160,
-    growTimeMs: 2 * MINUTE_MS,
+    growTimeMs: 12 * HOUR_MS,
     minYield: 5,
     maxYield: 8,
     maxSeedsPerPlot: 1000,
@@ -49,7 +50,7 @@ const CROPS = Object.freeze([
     requiredPlots: 1,
     seedPrice: 1_200,
     sellPrice: 400,
-    growTimeMs: 5 * MINUTE_MS,
+    growTimeMs: 14 * HOUR_MS,
     minYield: 5,
     maxYield: 8,
     maxSeedsPerPlot: 1000,
@@ -64,7 +65,7 @@ const CROPS = Object.freeze([
     requiredPlots: 2,
     seedPrice: 3_000,
     sellPrice: 900,
-    growTimeMs: 15 * MINUTE_MS,
+    growTimeMs: 18 * HOUR_MS,
     minYield: 5,
     maxYield: 8,
     maxSeedsPerPlot: 1000,
@@ -79,7 +80,7 @@ const CROPS = Object.freeze([
     requiredPlots: 2,
     seedPrice: 7_000,
     sellPrice: 2_200,
-    growTimeMs: 30 * MINUTE_MS,
+    growTimeMs: 24 * HOUR_MS,
     minYield: 5,
     maxYield: 8,
     maxSeedsPerPlot: 1000,
@@ -94,7 +95,7 @@ const CROPS = Object.freeze([
     requiredPlots: 3,
     seedPrice: 18_000,
     sellPrice: 6_000,
-    growTimeMs: HOUR_MS,
+    growTimeMs: 30 * HOUR_MS,
     minYield: 5,
     maxYield: 7,
     maxSeedsPerPlot: 1000,
@@ -109,7 +110,7 @@ const CROPS = Object.freeze([
     requiredPlots: 4,
     seedPrice: 50_000,
     sellPrice: 18_000,
-    growTimeMs: 2 * HOUR_MS,
+    growTimeMs: 36 * HOUR_MS,
     minYield: 4,
     maxYield: 7,
     maxSeedsPerPlot: 1000,
@@ -124,7 +125,7 @@ const CROPS = Object.freeze([
     requiredPlots: 5,
     seedPrice: 140_000,
     sellPrice: 55_000,
-    growTimeMs: 4 * HOUR_MS,
+    growTimeMs: 42 * HOUR_MS,
     minYield: 4,
     maxYield: 7,
     maxSeedsPerPlot: 300,
@@ -139,7 +140,7 @@ const CROPS = Object.freeze([
     requiredPlots: 6,
     seedPrice: 400_000,
     sellPrice: 180_000,
-    growTimeMs: 8 * HOUR_MS,
+    growTimeMs: 48 * HOUR_MS,
     minYield: 4,
     maxYield: 6,
     maxSeedsPerPlot: 100,
@@ -154,7 +155,7 @@ const CROPS = Object.freeze([
     requiredPlots: 7,
     seedPrice: 3_000_000,
     sellPrice: 2_000_000,
-    growTimeMs: 12 * HOUR_MS,
+    growTimeMs: 54 * HOUR_MS,
     minYield: 3,
     maxYield: 6,
     maxSeedsPerPlot: 10,
@@ -169,7 +170,7 @@ const CROPS = Object.freeze([
     requiredPlots: 8,
     seedPrice: 10_000_000,
     sellPrice: 8_000_000,
-    growTimeMs: 24 * HOUR_MS,
+    growTimeMs: 60 * HOUR_MS,
     minYield: 3,
     maxYield: 5,
     maxSeedsPerPlot: 3,
@@ -184,7 +185,7 @@ const CROPS = Object.freeze([
     requiredPlots: 8,
     seedPrice: 25_000_000,
     sellPrice: 22_000_000,
-    growTimeMs: 48 * HOUR_MS,
+    growTimeMs: 72 * HOUR_MS,
     minYield: 4,
     maxYield: 6,
     maxSeedsPerPlot: 1,
@@ -203,7 +204,7 @@ const UPGRADES = Object.freeze({
     key: 'irrigation',
     title: 'Система полива',
     emoji: '💧',
-    description: '+1% к всходам, +2% к созреванию и −5% времени роста за уровень.',
+    description: '+1% к всходам, +2% к созреванию и −5% времени роста за уровень (не ниже 12 часов).',
     costs: Object.freeze([
       150_000,
       750_000,
@@ -307,7 +308,7 @@ function getCropGrowTime(crop, irrigationLevel) {
   );
 
   return Math.max(
-    MINUTE_MS,
+    FARM_MIN_GROW_TIME_MS,
     Math.floor(
       crop.growTimeMs *
       (100 - level * 5) /

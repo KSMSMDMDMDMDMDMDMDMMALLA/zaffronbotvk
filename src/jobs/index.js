@@ -23,7 +23,7 @@ const {
   completeJob
 } = require('../database');
 
-const jobs = [
+const jobDefinitions = [
   janitor,
   roadWorker,
   seller,
@@ -36,6 +36,24 @@ const jobs = [
   primeMinister,
   ...advancedJobs
 ];
+
+const jobs = jobDefinitions.map(
+  (job, index) => {
+    const nextJob =
+      jobDefinitions[index + 1];
+    const maxLevel = nextJob
+      ? nextJob.requiredLevel - 1
+      : JOB_MAX_LEVEL;
+
+    return {
+      ...job,
+      maxLevel: Math.max(
+        job.requiredLevel,
+        maxLevel
+      )
+    };
+  }
+);
 
 const jobsByKey = new Map(
   jobs.map(job => [
@@ -96,6 +114,19 @@ function formatExperience(level, experience) {
   return `📈 EXP: ${experience}/${experienceRequired}`;
 }
 
+function getJobLevelRange(job) {
+  return job.requiredLevel === job.maxLevel
+    ? `${job.requiredLevel}`
+    : `${job.requiredLevel}–${job.maxLevel}`;
+}
+
+function getCurrentCareerJob(level) {
+  return jobs.find(job =>
+    level >= job.requiredLevel &&
+    level <= job.maxLevel
+  ) ?? jobs.at(-1);
+}
+
 async function getUserName(vk, userId) {
   try {
     const users = await vk.api.users.get({
@@ -151,15 +182,20 @@ function buildCompletionMessage(
 }
 
 function createContinueJobKeyboard(
-  jobKey,
+  completedJob,
+  level,
   userId
 ) {
+  const currentJob = getCurrentCareerJob(level);
+
   return Keyboard.builder()
     .textButton({
-      label: 'Продолжить работу',
+      label: currentJob.key === completedJob.key
+        ? 'Продолжить работу'
+        : `⬆ Новая работа: ${currentJob.title}`,
       payload: {
         command: 'job_continue',
-        jobKey,
+        jobKey: currentJob.key,
         userId
       },
       color: Keyboard.POSITIVE_COLOR
@@ -214,7 +250,8 @@ async function finishJob(vk, activeJob) {
         userName
       ),
       keyboard: createContinueJobKeyboard(
-        job.key,
+        job,
+        result.level,
         activeJob.vkId
       )
     });
@@ -272,10 +309,11 @@ async function sendJobsList(context) {
   );
 
   const lines = jobs.map(job => {
-    const access =
-      profile.level >= job.requiredLevel
-        ? '✅ Доступно'
-        : `🔒 С ${job.requiredLevel} уровня`;
+    const access = profile.level < job.requiredLevel
+      ? `🔒 С ${job.requiredLevel} уровня`
+      : profile.level > job.maxLevel
+        ? '⛔ Уже пройдена'
+        : '✅ Доступно сейчас';
 
     const experienceRequired =
       getJobExperienceRequired(job.requiredLevel);
@@ -287,7 +325,7 @@ async function sendJobsList(context) {
 
     return (
       `${job.emoji} ${job.title}\n` +
-      `├ Уровень: ${job.requiredLevel}\n` +
+      `├ Уровни: ${getJobLevelRange(job)}\n` +
       `├ Смена: ${formatDuration(job.durationMs)}\n` +
       `├ Зарплата: ${formatMoney(job.salary)} ₽\n` +
       experienceLine +
@@ -302,6 +340,7 @@ async function sendJobsList(context) {
     `${formatExperience(profile.level, profile.experience)}\n\n` +
     `${lines.join('\n\n')}\n\n` +
     'За каждую завершённую смену начисляется 1 EXP.\n' +
+    'После открытия новой профессии предыдущие работы закрываются.\n' +
     'Новые должности открываются вплоть до 50 уровня.\n' +
     'Максимальный уровень игрока — 50.'
   );
@@ -340,6 +379,22 @@ async function startJob(
       `🔒 Работа «${job.title}» доступна ` +
       `с ${job.requiredLevel} уровня.\n\n` +
       `⭐ Твой уровень: ${profile.level}`
+    );
+
+    return true;
+  }
+
+  if (profile.level > job.maxLevel) {
+    const currentJob = getCurrentCareerJob(
+      profile.level
+    );
+
+    await context.reply(
+      `⛔ Работа «${job.title}» уже слишком низкая для твоего уровня.\n\n` +
+      `📊 Она доступна на уровнях: ${getJobLevelRange(job)}\n` +
+      `⭐ Твой уровень: ${profile.level}\n\n` +
+      `💼 Текущая профессия: ${currentJob.emoji} ${currentJob.title}\n` +
+      `Команда: !работать ${currentJob.aliases[0]}`
     );
 
     return true;

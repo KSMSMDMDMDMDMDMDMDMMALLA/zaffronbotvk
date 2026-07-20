@@ -19,6 +19,13 @@ const COMMANDS = Object.freeze([
     acceptsArguments: true
   },
   { command: '!имущество', usage: '!имущество' },
+  { command: '!телефон', usage: '!телефон' },
+  { command: '!номер', usage: '!номер' },
+  {
+    command: '!позвонить',
+    usage: '!позвонить [номер]',
+    acceptsArguments: true
+  },
   {
     command: '!аренда',
     usage: '!аренда [название жилья]',
@@ -42,6 +49,16 @@ const COMMANDS = Object.freeze([
     acceptsArguments: true
   },
   { command: '!коробка', usage: '!коробка' },
+  { command: '!кейсы', usage: '!кейсы' },
+  {
+    command: '!кейс',
+    usage: '!кейс [бронзовый/серебряный/алмазный]',
+    acceptsArguments: true
+  },
+  {
+    command: '!склад лута',
+    usage: '!склад лута'
+  },
   { command: '!рыбачить', usage: '!рыбачить' },
   { command: '!улов', usage: '!улов' },
   { command: '!ферма', usage: '!ферма' },
@@ -108,27 +125,77 @@ const COMMANDS = Object.freeze([
   { command: '!гараж', usage: '!гараж' },
   {
     command: '!обнять',
-    usage: '!обнять [реплай]',
+    usage: '!обнять [username/реплай]',
     acceptsArguments: true
   },
   {
     command: '!поцеловать',
-    usage: '!поцеловать [реплай]',
+    usage: '!поцеловать [username/реплай]',
     acceptsArguments: true
   },
   {
     command: '!погладить',
-    usage: '!погладить [реплай]',
+    usage: '!погладить [username/реплай]',
     acceptsArguments: true
   },
   {
     command: '!дать пять',
-    usage: '!дать пять [реплай]',
+    usage: '!дать пять [username/реплай]',
     acceptsArguments: true
   },
   {
     command: '!подмигнуть',
-    usage: '!подмигнуть [реплай]',
+    usage: '!подмигнуть [username/реплай]',
+    acceptsArguments: true
+  },
+  {
+    command: '!пожать руку',
+    usage: '!пожать руку [username/реплай]',
+    acceptsArguments: true
+  },
+  {
+    command: '!похвалить',
+    usage: '!похвалить [username/реплай]',
+    acceptsArguments: true
+  },
+  {
+    command: '!поддержать',
+    usage: '!поддержать [username/реплай]',
+    acceptsArguments: true
+  },
+  {
+    command: '!рассмешить',
+    usage: '!рассмешить [username/реплай]',
+    acceptsArguments: true
+  },
+  {
+    command: '!угостить',
+    usage: '!угостить [username/реплай]',
+    acceptsArguments: true
+  },
+  {
+    command: '!подарить цветы',
+    usage: '!подарить цветы [username/реплай]',
+    acceptsArguments: true
+  },
+  {
+    command: '!потанцевать',
+    usage: '!потанцевать [username/реплай]',
+    acceptsArguments: true
+  },
+  {
+    command: '!напугать',
+    usage: '!напугать [username/реплай]',
+    acceptsArguments: true
+  },
+  {
+    command: '!сфотографироваться',
+    usage: '!сфотографироваться [username/реплай]',
+    acceptsArguments: true
+  },
+  {
+    command: '!пожелать удачи',
+    usage: '!пожелать удачи [username/реплай]',
     acceptsArguments: true
   },
   { command: '!угадай', usage: '!угадай' },

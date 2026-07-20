@@ -18,8 +18,74 @@ const RP_ACTIONS = Object.freeze({
   'подмигнуть': {
     emoji: '😉',
     action: 'подмигивает'
+  },
+  'пожать руку': {
+    emoji: '🤝',
+    action: 'пожимает руку'
+  },
+  'похвалить': {
+    emoji: '🌟',
+    action: 'хвалит'
+  },
+  'поддержать': {
+    emoji: '💙',
+    action: 'поддерживает'
+  },
+  'рассмешить': {
+    emoji: '😂',
+    action: 'смешит'
+  },
+  'угостить': {
+    emoji: '🍕',
+    action: 'угощает пиццей'
+  },
+  'подарить цветы': {
+    emoji: '💐',
+    action: 'дарит цветы'
+  },
+  'потанцевать': {
+    emoji: '💃',
+    action: 'танцует вместе с'
+  },
+  'напугать': {
+    emoji: '👻',
+    action: 'пугает'
+  },
+  'сфотографироваться': {
+    emoji: '📸',
+    action: 'фотографируется вместе с'
+  },
+  'пожелать удачи': {
+    emoji: '🍀',
+    action: 'желает удачи'
   }
 });
+
+function normalizeCommand(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/\s+/g, ' ');
+}
+
+function escapeRegularExpression(value) {
+  return String(value)
+    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    .replace(/\s+/g, '\\s+');
+}
+
+const commandPattern = Object.keys(RP_ACTIONS)
+  .sort((left, right) =>
+    right.length - left.length
+  )
+  .map(escapeRegularExpression)
+  .join('|');
+
+const rpCommandExpression = new RegExp(
+  `^!(${commandPattern})(?:\\s+(.+))?$`,
+  'iu'
+);
 
 function getReplySenderId(context) {
   const reply = context.replyMessage;
@@ -41,6 +107,60 @@ function getReplySenderId(context) {
   )
     ? numericId
     : null;
+}
+
+function extractVkTarget(value) {
+  const rawValue = String(value ?? '').trim();
+  const mentionMatch = rawValue.match(
+    /^\[id(\d+)\|[^\]]+\]$/i
+  );
+
+  if (mentionMatch) {
+    return `id${mentionMatch[1]}`;
+  }
+
+  return rawValue
+    .replace(
+      /^https?:\/\/(?:www\.)?vk\.(?:ru|com)\//i,
+      ''
+    )
+    .replace(/^vk\.(?:ru|com)\//i, '')
+    .replace(/^@/, '')
+    .split(/[/?#\s]/)[0]
+    .trim();
+}
+
+async function resolveTargetId(
+  context,
+  vk,
+  rawTarget
+) {
+  const target = extractVkTarget(rawTarget);
+
+  if (!target) {
+    return getReplySenderId(context);
+  }
+
+  try {
+    const users = await vk.api.users.get({
+      user_ids: target
+    });
+    const targetId = Number(users?.[0]?.id);
+
+    return (
+      Number.isInteger(targetId) &&
+      targetId > 0
+    )
+      ? targetId
+      : null;
+  } catch (error) {
+    console.error(
+      'Не удалось найти цель RP-команды:',
+      error?.message ?? error
+    );
+
+    return null;
+  }
 }
 
 function getMention(userId, usersById) {
@@ -69,7 +189,7 @@ async function getUsersById(vk, userIds) {
   } catch (error) {
     console.error(
       'Не удалось получить имена для RP-команды:',
-      error
+      error?.message ?? error
     );
 
     return new Map();
@@ -77,27 +197,31 @@ async function getUsersById(vk, userIds) {
 }
 
 async function handle(context, vk) {
-  const originalText =
-    String(context.text ?? '').trim();
+  const originalText = String(
+    context.text ?? ''
+  ).trim();
   const match = originalText.match(
-    /^!(обнять|поцеловать|погладить|дать\s+пять|подмигнуть)$/i
+    rpCommandExpression
   );
 
   if (!match) {
     return false;
   }
 
-  const command = match[1]
-    .toLowerCase()
-    .replace(/\s+/g, ' ');
+  const command = normalizeCommand(match[1]);
   const action = RP_ACTIONS[command];
   const senderId = Number(context.senderId);
-  const targetId = getReplySenderId(context);
+  const targetId = await resolveTargetId(
+    context,
+    vk,
+    match[2]
+  );
 
   if (!targetId) {
     await context.send(
-      `❌ Ответь командой !${command} ` +
-      'на сообщение другого пользователя.'
+      `❌ Ответь командой !${command} на сообщение игрока ` +
+      'или укажи его username.\n\n' +
+      `Пример: !${command} @username`
     );
 
     return true;

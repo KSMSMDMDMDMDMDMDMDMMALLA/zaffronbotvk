@@ -23,6 +23,7 @@ const BEGINNER_BOX_MAX_LEVEL = 3;
 const BEGINNER_BOX_COOLDOWN_MS =
   10 * 60 * 1000;
 const TRANSFER_DAILY_LIMIT = 5_000_000;
+const JOB_BOOST_DAILY_PURCHASE_LIMIT = 5;
 const FARM_MAX_PLOTS = 8;
 const FARM_MAX_UPGRADE_LEVEL = 5;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -32,6 +33,11 @@ const TRANSFER_DAY_STAT_KEY =
   'transfer_daily_day';
 const TRANSFER_AMOUNT_STAT_KEY =
   'transfer_daily_amount';
+const JOB_BOOST_ITEM_KEY = 'boost-job-x2';
+const JOB_BOOST_PURCHASE_DAY_STAT_KEY =
+  'job_boost_purchase_day';
+const JOB_BOOST_PURCHASE_COUNT_STAT_KEY =
+  'job_boost_purchase_count';
 
 const BANK_INTEREST_BRACKETS =
   Object.freeze([
@@ -177,6 +183,102 @@ function persistDatabase() {
     databasePath,
     Buffer.from(databaseBytes)
   );
+}
+
+function migratePhoneNumbersToSixDigits() {
+  ensureDatabase();
+
+  const statement = db.prepare(`
+    SELECT
+      vk_id,
+      phone_number
+    FROM phone_sims
+    ORDER BY vk_id ASC
+  `);
+  const sims = [];
+
+  while (statement.step()) {
+    const row = statement.getAsObject();
+
+    sims.push({
+      vkId: Number(row.vk_id),
+      phoneNumber: String(row.phone_number)
+    });
+  }
+
+  statement.free();
+
+  const occupiedNumbers = new Set(
+    sims
+      .map(sim => sim.phoneNumber)
+      .filter(phoneNumber =>
+        /^\d{6}$/.test(phoneNumber)
+      )
+  );
+  const legacySims = sims.filter(sim =>
+    !/^\d{6}$/.test(sim.phoneNumber)
+  );
+
+  if (legacySims.length === 0) {
+    return 0;
+  }
+
+  try {
+    db.run('BEGIN TRANSACTION;');
+
+    for (const sim of legacySims) {
+      const digits = sim.phoneNumber
+        .replace(/\D/g, '');
+      let candidate = digits
+        .slice(-6)
+        .padStart(6, '0');
+
+      if (occupiedNumbers.has(candidate)) {
+        let numericCandidate =
+          100_000 +
+          Math.abs(
+            (sim.vkId * 7_919) % 900_000
+          );
+
+        while (
+          occupiedNumbers.has(
+            String(numericCandidate)
+          )
+        ) {
+          numericCandidate += 1;
+
+          if (numericCandidate > 999_999) {
+            numericCandidate = 100_000;
+          }
+        }
+
+        candidate = String(numericCandidate);
+      }
+
+      db.run(
+        `
+          UPDATE phone_sims
+          SET phone_number = ?
+          WHERE vk_id = ?
+        `,
+        [candidate, sim.vkId]
+      );
+
+      occupiedNumbers.add(candidate);
+    }
+
+    db.run('COMMIT;');
+
+    return legacySims.length;
+  } catch (error) {
+    try {
+      db.run('ROLLBACK;');
+    } catch {
+      // Транзакция могла не успеть начаться.
+    }
+
+    throw error;
+  }
 }
 
 async function initializeDatabase() {
@@ -575,6 +677,103 @@ async function initializeDatabase() {
       ),
 
       CHECK (quantity >= 0)
+    );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS phone_sims (
+      vk_id INTEGER PRIMARY KEY,
+      phone_number TEXT NOT NULL UNIQUE,
+      rarity TEXT NOT NULL,
+      purchased_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+      CHECK (
+        rarity IN (
+          'standard',
+          'pretty',
+          'elite'
+        )
+      )
+    );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS phone_calls (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      caller_vk_id INTEGER NOT NULL,
+      receiver_vk_id INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      accepted_at INTEGER NOT NULL DEFAULT 0,
+      expires_at INTEGER NOT NULL,
+
+      CHECK (
+        status IN (
+          'ringing',
+          'active'
+        )
+      ),
+      CHECK (caller_vk_id != receiver_vk_id),
+      CHECK (created_at >= 0),
+      CHECK (accepted_at >= 0),
+      CHECK (expires_at >= created_at)
+    );
+  `);
+
+  db.run(`
+    CREATE INDEX IF NOT EXISTS phone_calls_caller_index
+    ON phone_calls (caller_vk_id);
+  `);
+
+  db.run(`
+    CREATE INDEX IF NOT EXISTS phone_calls_receiver_index
+    ON phone_calls (receiver_vk_id);
+  `);
+
+  migratePhoneNumbersToSixDigits();
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS loot_case_inventory (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      vk_id INTEGER NOT NULL,
+      case_key TEXT NOT NULL,
+      loot_key TEXT NOT NULL,
+      loot_title TEXT NOT NULL,
+      rarity TEXT NOT NULL,
+      sell_value INTEGER NOT NULL,
+      asset_key TEXT,
+      asset_type TEXT,
+      obtained_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+      CHECK (
+        rarity IN (
+          'bad',
+          'medium',
+          'best',
+          'jackpot'
+        )
+      ),
+      CHECK (sell_value > 0)
+    );
+  `);
+
+  db.run(`
+    CREATE INDEX IF NOT EXISTS loot_case_inventory_owner_index
+    ON loot_case_inventory (vk_id, id);
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS loot_case_stats (
+      vk_id INTEGER PRIMARY KEY,
+      opened_count INTEGER NOT NULL DEFAULT 0,
+      total_spent INTEGER NOT NULL DEFAULT 0,
+      total_sold INTEGER NOT NULL DEFAULT 0,
+      jackpots INTEGER NOT NULL DEFAULT 0,
+
+      CHECK (opened_count >= 0),
+      CHECK (total_spent >= 0),
+      CHECK (total_sold >= 0),
+      CHECK (jackpots >= 0)
     );
   `);
 
@@ -1308,7 +1507,7 @@ function removeBalance(vkId, amount) {
   };
 }
 
-function getMoscowTransferDay(currentTime) {
+function getMoscowDay(currentTime) {
   const safeCurrentTime = Number(currentTime);
 
   if (
@@ -1316,7 +1515,7 @@ function getMoscowTransferDay(currentTime) {
     safeCurrentTime < 0
   ) {
     throw new Error(
-      'Некорректное время перевода'
+      'Некорректное время операции'
     );
   }
 
@@ -1343,7 +1542,7 @@ function getDailyTransferUsage(
     );
   }
 
-  const day = getMoscowTransferDay(
+  const day = getMoscowDay(
     currentTime
   );
   const storedDay = getQuestStat(
@@ -2888,13 +3087,60 @@ function getJobBoostCount(vkId) {
   return quantity;
 }
 
+function getDailyJobBoostPurchaseUsage(
+  vkId,
+  currentTime = Date.now()
+) {
+  ensureDatabase();
+
+  const safeVkId = Number(vkId);
+
+  if (
+    !Number.isInteger(safeVkId) ||
+    safeVkId <= 0
+  ) {
+    throw new Error(
+      'VK ID должен быть положительным целым числом'
+    );
+  }
+
+  const day = getMoscowDay(currentTime);
+  const storedDay = getQuestStat(
+    safeVkId,
+    JOB_BOOST_PURCHASE_DAY_STAT_KEY
+  );
+  const storedCount = getQuestStat(
+    safeVkId,
+    JOB_BOOST_PURCHASE_COUNT_STAT_KEY
+  );
+  const purchased = storedDay === day
+    ? Math.min(
+      JOB_BOOST_DAILY_PURCHASE_LIMIT,
+      Math.max(0, storedCount)
+    )
+    : 0;
+
+  return {
+    day,
+    limit: JOB_BOOST_DAILY_PURCHASE_LIMIT,
+    purchased,
+    remaining:
+      JOB_BOOST_DAILY_PURCHASE_LIMIT -
+      purchased,
+    resetAt:
+      (day + 1) * DAY_MS -
+      MOSCOW_UTC_OFFSET_MS
+  };
+}
+
 function purchaseMagazineItem({
   vkId,
   itemKey,
   itemType,
   price,
   consumable = false,
-  consumableQuantity = 1
+  consumableQuantity = 1,
+  currentTime = Date.now()
 }) {
   ensureDatabase();
 
@@ -2908,6 +3154,9 @@ function purchaseMagazineItem({
   const safeConsumableQuantity = Number(
     consumableQuantity
   );
+  const isDailyLimitedJobBoost =
+    isConsumable &&
+    safeItemKey === JOB_BOOST_ITEM_KEY;
 
   if (!Number.isInteger(safeVkId)) {
     throw new Error(
@@ -2960,6 +3209,26 @@ function purchaseMagazineItem({
     }
   }
 
+  const dailyBoostPurchase =
+    isDailyLimitedJobBoost
+      ? getDailyJobBoostPurchaseUsage(
+        safeVkId,
+        currentTime
+      )
+      : null;
+
+  if (
+    dailyBoostPurchase &&
+    safeConsumableQuantity >
+      dailyBoostPurchase.remaining
+  ) {
+    return {
+      status: 'daily_limit',
+      ...dailyBoostPurchase,
+      boostCount: getJobBoostCount(safeVkId)
+    };
+  }
+
   const currentBalance =
     getBalance(safeVkId);
 
@@ -3005,6 +3274,54 @@ function purchaseMagazineItem({
           safeConsumableQuantity
         ]
       );
+
+      if (dailyBoostPurchase) {
+        const newDailyPurchaseCount =
+          dailyBoostPurchase.purchased +
+          safeConsumableQuantity;
+
+        db.run(
+          `
+            INSERT INTO quest_stats (
+              vk_id,
+              stat_key,
+              value
+            )
+            VALUES (?, ?, ?)
+
+            ON CONFLICT(vk_id, stat_key)
+            DO UPDATE SET
+              value = excluded.value,
+              updated_at = CURRENT_TIMESTAMP
+          `,
+          [
+            safeVkId,
+            JOB_BOOST_PURCHASE_DAY_STAT_KEY,
+            dailyBoostPurchase.day
+          ]
+        );
+
+        db.run(
+          `
+            INSERT INTO quest_stats (
+              vk_id,
+              stat_key,
+              value
+            )
+            VALUES (?, ?, ?)
+
+            ON CONFLICT(vk_id, stat_key)
+            DO UPDATE SET
+              value = excluded.value,
+              updated_at = CURRENT_TIMESTAMP
+          `,
+          [
+            safeVkId,
+            JOB_BOOST_PURCHASE_COUNT_STAT_KEY,
+            newDailyPurchaseCount
+          ]
+        );
+      }
     } else {
       db.run(
         `
@@ -3049,7 +3366,21 @@ function purchaseMagazineItem({
       status: 'purchased',
       price: safePrice,
       balance: currentBalance - safePrice,
-      boostCount: getJobBoostCount(safeVkId)
+      boostCount: getJobBoostCount(safeVkId),
+      ...(dailyBoostPurchase
+        ? {
+          dailyPurchaseLimit:
+            dailyBoostPurchase.limit,
+          purchasedToday:
+            dailyBoostPurchase.purchased +
+            safeConsumableQuantity,
+          dailyPurchaseRemaining:
+            dailyBoostPurchase.remaining -
+            safeConsumableQuantity,
+          dailyPurchaseResetAt:
+            dailyBoostPurchase.resetAt
+        }
+        : {})
     };
   } catch (error) {
     try {
@@ -3120,6 +3451,9 @@ function sellMagazineAsset({
 
   const currentBalance =
     getBalance(safeVkId);
+  const phoneSim = safeItemType === 'phones'
+    ? getPhoneSim(safeVkId)
+    : null;
 
   if (
     currentBalance >
@@ -3175,6 +3509,25 @@ function sellMagazineAsset({
       );
     }
 
+    if (safeItemType === 'phones') {
+      db.run(
+        `
+          DELETE FROM phone_calls
+          WHERE caller_vk_id = ?
+             OR receiver_vk_id = ?
+        `,
+        [safeVkId, safeVkId]
+      );
+
+      db.run(
+        `
+          DELETE FROM phone_sims
+          WHERE vk_id = ?
+        `,
+        [safeVkId]
+      );
+    }
+
     if (safeResaleValue > 0) {
       db.run(
         `
@@ -3202,6 +3555,8 @@ function sellMagazineAsset({
     return {
       status: 'sold',
       resaleValue: safeResaleValue,
+      releasedPhoneNumber:
+        phoneSim?.phoneNumber ?? null,
       balance:
         currentBalance +
         safeResaleValue
@@ -6347,6 +6702,152 @@ function normalizePromoCode(value) {
     .toUpperCase();
 }
 
+function getAdminStatistics() {
+  ensureDatabase();
+
+  function getScalar(query) {
+    const statement = db.prepare(query);
+    let value = 0;
+
+    if (statement.step()) {
+      const row = statement.getAsObject();
+      const firstValue = Object.values(row)[0];
+
+      value = Number(firstValue) || 0;
+    }
+
+    statement.free();
+
+    return value;
+  }
+
+  return {
+    users: getScalar(`
+      SELECT COUNT(*)
+      FROM users
+      WHERE vk_id > 0
+    `),
+    totalBalance: getScalar(`
+      SELECT COALESCE(SUM(dollars), 0)
+      FROM balances
+    `),
+    totalBankBalance: getScalar(`
+      SELECT COALESCE(SUM(balance), 0)
+      FROM bank_accounts
+    `),
+    totalAura: getScalar(`
+      SELECT COALESCE(SUM(aura), 0)
+      FROM aura
+    `),
+    assets: getScalar(`
+      SELECT COUNT(*)
+      FROM magazine_assets
+    `),
+    businesses: getScalar(`
+      SELECT COUNT(*)
+      FROM magazine_assets
+      WHERE item_type = 'businesses'
+    `),
+    phoneSims: getScalar(`
+      SELECT COUNT(*)
+      FROM phone_sims
+    `),
+    farmOwners: getScalar(`
+      SELECT COUNT(*)
+      FROM farm_profiles
+      WHERE plot_count > 0
+    `),
+    plantedFarmPlots: getScalar(`
+      SELECT COUNT(*)
+      FROM farm_plots
+    `),
+    activeJobs: getScalar(`
+      SELECT COUNT(*)
+      FROM active_jobs
+    `),
+    ringingCalls: getScalar(`
+      SELECT COUNT(*)
+      FROM phone_calls
+      WHERE status = 'ringing'
+    `),
+    activeCalls: getScalar(`
+      SELECT COUNT(*)
+      FROM phone_calls
+      WHERE status = 'active'
+    `),
+    lootCaseItems: getScalar(`
+      SELECT COUNT(*)
+      FROM loot_case_inventory
+    `),
+    lootCaseWarehouseValue: getScalar(`
+      SELECT COALESCE(SUM(sell_value), 0)
+      FROM loot_case_inventory
+    `),
+    lootCasesOpened: getScalar(`
+      SELECT COALESCE(SUM(opened_count), 0)
+      FROM loot_case_stats
+    `),
+    promos: getScalar(`
+      SELECT COUNT(*)
+      FROM promos
+    `),
+    promoRedemptions: getScalar(`
+      SELECT COUNT(*)
+      FROM promo_redemptions
+    `)
+  };
+}
+
+function getPromoOverview(limit = 20) {
+  ensureDatabase();
+
+  const safeLimit = Math.max(
+    1,
+    Math.min(Number(limit) || 20, 50)
+  );
+  const statement = db.prepare(`
+    SELECT
+      promos.code,
+      promos.reward_type,
+      promos.amount,
+      promos.created_by,
+      promos.created_at,
+      COUNT(promo_redemptions.vk_id) AS redemptions
+    FROM promos
+    LEFT JOIN promo_redemptions
+      ON promo_redemptions.code = promos.code COLLATE NOCASE
+    GROUP BY
+      promos.code,
+      promos.reward_type,
+      promos.amount,
+      promos.created_by,
+      promos.created_at
+    ORDER BY promos.created_at DESC
+    LIMIT ?
+  `);
+
+  statement.bind([safeLimit]);
+  const promos = [];
+
+  while (statement.step()) {
+    const row = statement.getAsObject();
+
+    promos.push({
+      code: String(row.code),
+      rewardType: String(row.reward_type),
+      amount: Number(row.amount) || 0,
+      createdBy: Number(row.created_by),
+      createdAt: String(row.created_at),
+      redemptions:
+        Number(row.redemptions) || 0
+    });
+  }
+
+  statement.free();
+
+  return promos;
+}
+
 function createPromo({
   code,
   rewardType,
@@ -7785,6 +8286,1312 @@ function sellAllFarmProduce({
   }
 }
 
+function validateLootCaseVkId(vkId) {
+  const safeVkId = Number(vkId);
+
+  if (
+    !Number.isInteger(safeVkId) ||
+    safeVkId <= 0
+  ) {
+    throw new Error(
+      'VK ID должен быть положительным целым числом'
+    );
+  }
+
+  return safeVkId;
+}
+
+function mapLootCaseItem(row) {
+  return {
+    id: Number(row.id),
+    vkId: Number(row.vk_id),
+    caseKey: String(row.case_key),
+    lootKey: String(row.loot_key),
+    title: String(row.loot_title),
+    rarity: String(row.rarity),
+    sellValue: Number(row.sell_value) || 0,
+    assetKey: row.asset_key
+      ? String(row.asset_key)
+      : null,
+    assetType: row.asset_type
+      ? String(row.asset_type)
+      : null,
+    obtainedAt: String(row.obtained_at)
+  };
+}
+
+function getLootCaseItem(vkId, itemId) {
+  ensureDatabase();
+
+  const safeVkId = validateLootCaseVkId(vkId);
+  const safeItemId = Number(itemId);
+
+  if (
+    !Number.isInteger(safeItemId) ||
+    safeItemId <= 0
+  ) {
+    return null;
+  }
+
+  const statement = db.prepare(`
+    SELECT
+      id,
+      vk_id,
+      case_key,
+      loot_key,
+      loot_title,
+      rarity,
+      sell_value,
+      asset_key,
+      asset_type,
+      obtained_at
+    FROM loot_case_inventory
+    WHERE id = ?
+      AND vk_id = ?
+  `);
+
+  statement.bind([safeItemId, safeVkId]);
+  let item = null;
+
+  if (statement.step()) {
+    item = mapLootCaseItem(
+      statement.getAsObject()
+    );
+  }
+
+  statement.free();
+
+  return item;
+}
+
+function getLootCaseStats(vkId) {
+  ensureDatabase();
+
+  const safeVkId = validateLootCaseVkId(vkId);
+  const statement = db.prepare(`
+    SELECT
+      opened_count,
+      total_spent,
+      total_sold,
+      jackpots
+    FROM loot_case_stats
+    WHERE vk_id = ?
+  `);
+
+  statement.bind([safeVkId]);
+  let stats = {
+    openedCount: 0,
+    totalSpent: 0,
+    totalSold: 0,
+    jackpots: 0
+  };
+
+  if (statement.step()) {
+    const row = statement.getAsObject();
+
+    stats = {
+      openedCount:
+        Number(row.opened_count) || 0,
+      totalSpent:
+        Number(row.total_spent) || 0,
+      totalSold:
+        Number(row.total_sold) || 0,
+      jackpots: Number(row.jackpots) || 0
+    };
+  }
+
+  statement.free();
+
+  return stats;
+}
+
+function getLootCaseInventory(vkId) {
+  ensureDatabase();
+
+  const safeVkId = validateLootCaseVkId(vkId);
+  const statement = db.prepare(`
+    SELECT
+      MIN(id) AS first_item_id,
+      case_key,
+      loot_key,
+      loot_title,
+      rarity,
+      sell_value,
+      asset_key,
+      asset_type,
+      COUNT(*) AS quantity,
+      SUM(sell_value) AS total_value
+    FROM loot_case_inventory
+    WHERE vk_id = ?
+    GROUP BY
+      case_key,
+      loot_key,
+      loot_title,
+      rarity,
+      sell_value,
+      asset_key,
+      asset_type
+    ORDER BY
+      CASE rarity
+        WHEN 'jackpot' THEN 1
+        WHEN 'best' THEN 2
+        WHEN 'medium' THEN 3
+        ELSE 4
+      END,
+      total_value DESC,
+      loot_title ASC
+  `);
+
+  statement.bind([safeVkId]);
+  const items = [];
+  let itemCount = 0;
+  let totalValue = 0;
+
+  while (statement.step()) {
+    const row = statement.getAsObject();
+    const item = {
+      firstItemId:
+        Number(row.first_item_id),
+      caseKey: String(row.case_key),
+      lootKey: String(row.loot_key),
+      title: String(row.loot_title),
+      rarity: String(row.rarity),
+      sellValue:
+        Number(row.sell_value) || 0,
+      assetKey: row.asset_key
+        ? String(row.asset_key)
+        : null,
+      assetType: row.asset_type
+        ? String(row.asset_type)
+        : null,
+      quantity: Number(row.quantity) || 0,
+      totalValue:
+        Number(row.total_value) || 0
+    };
+
+    items.push(item);
+    itemCount += item.quantity;
+    totalValue += item.totalValue;
+  }
+
+  statement.free();
+
+  return {
+    items,
+    itemCount,
+    totalValue,
+    stats: getLootCaseStats(safeVkId)
+  };
+}
+
+function purchaseLootCase({
+  vkId,
+  caseKey,
+  price,
+  lootKey,
+  lootTitle,
+  rarity,
+  sellValue,
+  assetKey = null,
+  assetType = null
+}) {
+  ensureDatabase();
+
+  const safeVkId = validateLootCaseVkId(vkId);
+  const safeCaseKey = String(caseKey ?? '').trim();
+  const safeLootKey = String(lootKey ?? '').trim();
+  const safeLootTitle = String(lootTitle ?? '').trim();
+  const safeRarity = String(rarity ?? '').trim();
+  const safePrice = Number(price);
+  const safeSellValue = Number(sellValue);
+  const safeAssetKey = assetKey
+    ? String(assetKey).trim()
+    : null;
+  const safeAssetType = assetType
+    ? String(assetType).trim()
+    : null;
+
+  if (
+    !/^[a-z0-9_-]{1,64}$/i.test(safeCaseKey) ||
+    !/^[a-z0-9_-]{1,64}$/i.test(safeLootKey) ||
+    !safeLootTitle ||
+    safeLootTitle.length > 100
+  ) {
+    throw new Error(
+      'Некорректные данные кейса или награды'
+    );
+  }
+
+  if (
+    !['bad', 'medium', 'best', 'jackpot']
+      .includes(safeRarity)
+  ) {
+    throw new Error(
+      'Некорректная редкость награды'
+    );
+  }
+
+  if (
+    !Number.isSafeInteger(safePrice) ||
+    safePrice <= 0 ||
+    !Number.isSafeInteger(safeSellValue) ||
+    safeSellValue <= 0
+  ) {
+    throw new Error(
+      'Цена кейса и стоимость награды должны быть положительными целыми числами'
+    );
+  }
+
+  if (
+    Boolean(safeAssetKey) !==
+      Boolean(safeAssetType) ||
+    (safeAssetKey &&
+      !/^[a-z0-9_-]{1,64}$/i.test(safeAssetKey)) ||
+    (safeAssetType &&
+      !/^[a-z0-9_-]{1,64}$/i.test(safeAssetType))
+  ) {
+    throw new Error(
+      'Некорректное имущество в награде'
+    );
+  }
+
+  const balance = getBalance(safeVkId);
+
+  if (balance < safePrice) {
+    return {
+      status: 'insufficient_funds',
+      price: safePrice,
+      balance,
+      missing: safePrice - balance
+    };
+  }
+
+  try {
+    db.run('BEGIN TRANSACTION;');
+
+    db.run(
+      `
+        UPDATE balances
+        SET dollars = dollars - ?
+        WHERE vk_id = ?
+          AND dollars >= ?
+      `,
+      [safePrice, safeVkId, safePrice]
+    );
+
+    db.run(
+      `
+        INSERT INTO loot_case_inventory (
+          vk_id,
+          case_key,
+          loot_key,
+          loot_title,
+          rarity,
+          sell_value,
+          asset_key,
+          asset_type
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        safeVkId,
+        safeCaseKey,
+        safeLootKey,
+        safeLootTitle,
+        safeRarity,
+        safeSellValue,
+        safeAssetKey,
+        safeAssetType
+      ]
+    );
+
+    const itemId = Number(
+      db.exec(
+        'SELECT last_insert_rowid() AS id;'
+      )[0].values[0][0]
+    );
+
+    db.run(
+      `
+        INSERT INTO loot_case_stats (
+          vk_id,
+          opened_count,
+          total_spent,
+          jackpots
+        )
+        VALUES (?, 1, ?, ?)
+
+        ON CONFLICT(vk_id)
+        DO UPDATE SET
+          opened_count = opened_count + 1,
+          total_spent = total_spent + excluded.total_spent,
+          jackpots = jackpots + excluded.jackpots
+      `,
+      [
+        safeVkId,
+        safePrice,
+        safeRarity === 'jackpot' ? 1 : 0
+      ]
+    );
+
+    db.run('COMMIT;');
+    persistDatabase();
+
+    return {
+      status: 'opened',
+      price: safePrice,
+      balance: balance - safePrice,
+      item: getLootCaseItem(
+        safeVkId,
+        itemId
+      )
+    };
+  } catch (error) {
+    try {
+      db.run('ROLLBACK;');
+    } catch {
+      // Транзакция могла не успеть начаться.
+    }
+
+    throw error;
+  }
+}
+
+function sellLootCaseItems({
+  vkId,
+  itemId = null,
+  lootKey = null,
+  sellAll = false
+}) {
+  ensureDatabase();
+
+  const safeVkId = validateLootCaseVkId(vkId);
+  const safeItemId = Number(itemId);
+  const safeLootKey = lootKey
+    ? String(lootKey).trim()
+    : null;
+  let whereClause = 'vk_id = ?';
+  const parameters = [safeVkId];
+
+  if (
+    !sellAll &&
+    Number.isInteger(safeItemId) &&
+    safeItemId > 0
+  ) {
+    whereClause += ' AND id = ?';
+    parameters.push(safeItemId);
+  } else if (
+    !sellAll &&
+    safeLootKey &&
+    /^[a-z0-9_-]{1,64}$/i.test(safeLootKey)
+  ) {
+    whereClause += ' AND loot_key = ?';
+    parameters.push(safeLootKey);
+  } else if (!sellAll) {
+    throw new Error(
+      'Не указан предмет для продажи'
+    );
+  }
+
+  const statement = db.prepare(`
+    SELECT
+      id,
+      sell_value
+    FROM loot_case_inventory
+    WHERE ${whereClause}
+  `);
+
+  statement.bind(parameters);
+  const itemIds = [];
+  let earned = 0;
+
+  while (statement.step()) {
+    const row = statement.getAsObject();
+
+    itemIds.push(Number(row.id));
+    earned += Number(row.sell_value) || 0;
+  }
+
+  statement.free();
+
+  if (itemIds.length === 0) {
+    return {
+      status: 'not_found',
+      balance: getBalance(safeVkId)
+    };
+  }
+
+  const balance = getBalance(safeVkId);
+
+  if (
+    !Number.isSafeInteger(earned) ||
+    earned <= 0 ||
+    balance > Number.MAX_SAFE_INTEGER - earned
+  ) {
+    return {
+      status: 'balance_limit'
+    };
+  }
+
+  try {
+    db.run('BEGIN TRANSACTION;');
+
+    db.run(
+      `
+        DELETE FROM loot_case_inventory
+        WHERE ${whereClause}
+      `,
+      parameters
+    );
+
+    db.run(
+      `
+        INSERT INTO balances (
+          vk_id,
+          dollars
+        )
+        VALUES (?, ?)
+
+        ON CONFLICT(vk_id)
+        DO UPDATE SET
+          dollars = dollars + excluded.dollars
+      `,
+      [safeVkId, earned]
+    );
+
+    db.run(
+      `
+        INSERT INTO loot_case_stats (
+          vk_id,
+          total_sold
+        )
+        VALUES (?, ?)
+
+        ON CONFLICT(vk_id)
+        DO UPDATE SET
+          total_sold = total_sold + excluded.total_sold
+      `,
+      [safeVkId, earned]
+    );
+
+    db.run('COMMIT;');
+    persistDatabase();
+
+    return {
+      status: 'sold',
+      itemCount: itemIds.length,
+      earned,
+      balance: balance + earned
+    };
+  } catch (error) {
+    try {
+      db.run('ROLLBACK;');
+    } catch {
+      // Транзакция могла не успеть начаться.
+    }
+
+    throw error;
+  }
+}
+
+function sellLootCaseItem({
+  vkId,
+  itemId
+}) {
+  return sellLootCaseItems({
+    vkId,
+    itemId
+  });
+}
+
+function sellLootCaseGroup({
+  vkId,
+  lootKey
+}) {
+  return sellLootCaseItems({
+    vkId,
+    lootKey
+  });
+}
+
+function sellAllLootCaseItems(vkId) {
+  return sellLootCaseItems({
+    vkId,
+    sellAll: true
+  });
+}
+
+function claimLootCaseAsset({
+  vkId,
+  itemId
+}) {
+  ensureDatabase();
+
+  const safeVkId = validateLootCaseVkId(vkId);
+  const item = getLootCaseItem(
+    safeVkId,
+    itemId
+  );
+
+  if (!item) {
+    return {
+      status: 'not_found'
+    };
+  }
+
+  if (!item.assetKey || !item.assetType) {
+    return {
+      status: 'not_asset',
+      item
+    };
+  }
+
+  const alreadyOwned = getMagazineAssets(safeVkId)
+    .some(asset =>
+      asset.itemKey === item.assetKey
+    );
+
+  if (alreadyOwned) {
+    return {
+      status: 'already_owned',
+      item
+    };
+  }
+
+  try {
+    db.run('BEGIN TRANSACTION;');
+
+    db.run(
+      `
+        DELETE FROM loot_case_inventory
+        WHERE id = ?
+          AND vk_id = ?
+      `,
+      [item.id, safeVkId]
+    );
+
+    db.run(
+      `
+        INSERT INTO magazine_assets (
+          vk_id,
+          item_key,
+          item_type
+        )
+        VALUES (?, ?, ?)
+      `,
+      [
+        safeVkId,
+        item.assetKey,
+        item.assetType
+      ]
+    );
+
+    db.run('COMMIT;');
+    persistDatabase();
+
+    return {
+      status: 'claimed',
+      item
+    };
+  } catch (error) {
+    try {
+      db.run('ROLLBACK;');
+    } catch {
+      // Транзакция могла не успеть начаться.
+    }
+
+    throw error;
+  }
+}
+
+function validatePhoneVkId(vkId) {
+  const safeVkId = Number(vkId);
+
+  if (
+    !Number.isInteger(safeVkId) ||
+    safeVkId <= 0
+  ) {
+    throw new Error(
+      'VK ID должен быть положительным целым числом'
+    );
+  }
+
+  return safeVkId;
+}
+
+function validateStoredPhoneNumber(phoneNumber) {
+  const safePhoneNumber =
+    String(phoneNumber ?? '').trim();
+
+  if (!/^\d{6}$/.test(safePhoneNumber)) {
+    throw new Error(
+      'Номер телефона должен состоять из 6 цифр'
+    );
+  }
+
+  return safePhoneNumber;
+}
+
+function getPhoneSim(vkId) {
+  ensureDatabase();
+
+  const safeVkId = validatePhoneVkId(vkId);
+  const statement = db.prepare(`
+    SELECT
+      vk_id,
+      phone_number,
+      rarity,
+      purchased_at
+    FROM phone_sims
+    WHERE vk_id = ?
+  `);
+
+  statement.bind([safeVkId]);
+  let sim = null;
+
+  if (statement.step()) {
+    const row = statement.getAsObject();
+
+    sim = {
+      vkId: Number(row.vk_id),
+      phoneNumber: String(row.phone_number),
+      rarity: String(row.rarity),
+      purchasedAt: String(row.purchased_at)
+    };
+  }
+
+  statement.free();
+
+  return sim;
+}
+
+function getPhoneSimByNumber(phoneNumber) {
+  ensureDatabase();
+
+  const safePhoneNumber =
+    validateStoredPhoneNumber(phoneNumber);
+  const statement = db.prepare(`
+    SELECT
+      vk_id,
+      phone_number,
+      rarity,
+      purchased_at
+    FROM phone_sims
+    WHERE phone_number = ?
+  `);
+
+  statement.bind([safePhoneNumber]);
+  let sim = null;
+
+  if (statement.step()) {
+    const row = statement.getAsObject();
+
+    sim = {
+      vkId: Number(row.vk_id),
+      phoneNumber: String(row.phone_number),
+      rarity: String(row.rarity),
+      purchasedAt: String(row.purchased_at)
+    };
+  }
+
+  statement.free();
+
+  return sim;
+}
+
+function mapPhoneCallRow(row, vkId = null) {
+  const safeVkId = Number(vkId);
+  const callerVkId = Number(row.caller_vk_id);
+  const receiverVkId = Number(row.receiver_vk_id);
+
+  return {
+    id: Number(row.id),
+    callerVkId,
+    receiverVkId,
+    status: String(row.status),
+    createdAt: Number(row.created_at),
+    acceptedAt: Number(row.accepted_at) || 0,
+    expiresAt: Number(row.expires_at),
+    ...(Number.isInteger(safeVkId)
+      ? {
+        isCaller: callerVkId === safeVkId,
+        otherVkId:
+          callerVkId === safeVkId
+            ? receiverVkId
+            : callerVkId
+      }
+      : {})
+  };
+}
+
+function cleanupExpiredPhoneCalls(
+  currentTime = Date.now()
+) {
+  ensureDatabase();
+
+  const safeCurrentTime = Number(currentTime);
+
+  if (
+    !Number.isSafeInteger(safeCurrentTime) ||
+    safeCurrentTime < 0
+  ) {
+    throw new Error(
+      'Некорректное время проверки звонков'
+    );
+  }
+
+  db.run(
+    `
+      DELETE FROM phone_calls
+      WHERE expires_at <= ?
+    `,
+    [safeCurrentTime]
+  );
+
+  const removed = db.getRowsModified();
+
+  if (removed > 0) {
+    persistDatabase();
+  }
+
+  return removed;
+}
+
+function purchasePhoneSim({
+  vkId,
+  phoneNumber,
+  rarity,
+  price
+}) {
+  ensureDatabase();
+
+  const safeVkId = validatePhoneVkId(vkId);
+  const safePhoneNumber =
+    validateStoredPhoneNumber(phoneNumber);
+  const safeRarity =
+    String(rarity ?? '').trim();
+  const safePrice = Number(price);
+
+  if (
+    !['standard', 'pretty', 'elite']
+      .includes(safeRarity)
+  ) {
+    throw new Error(
+      'Некорректная редкость SIM-карты'
+    );
+  }
+
+  if (
+    !Number.isSafeInteger(safePrice) ||
+    safePrice <= 0
+  ) {
+    throw new Error(
+      'Стоимость SIM-карты должна быть положительным целым числом'
+    );
+  }
+
+  const existingSim = getPhoneSim(safeVkId);
+
+  if (existingSim) {
+    return {
+      status: 'already_owned',
+      sim: existingSim,
+      balance: getBalance(safeVkId)
+    };
+  }
+
+  const assetStatement = db.prepare(`
+    SELECT 1
+    FROM magazine_assets
+    WHERE vk_id = ?
+      AND item_type = 'phones'
+    LIMIT 1
+  `);
+
+  assetStatement.bind([safeVkId]);
+  const hasPhone = assetStatement.step();
+  assetStatement.free();
+
+  if (!hasPhone) {
+    return {
+      status: 'no_phone',
+      balance: getBalance(safeVkId)
+    };
+  }
+
+  if (getPhoneSimByNumber(safePhoneNumber)) {
+    return {
+      status: 'number_taken'
+    };
+  }
+
+  const currentBalance = getBalance(safeVkId);
+
+  if (currentBalance < safePrice) {
+    return {
+      status: 'insufficient_funds',
+      price: safePrice,
+      balance: currentBalance,
+      missing: safePrice - currentBalance
+    };
+  }
+
+  try {
+    db.run('BEGIN TRANSACTION;');
+
+    db.run(
+      `
+        UPDATE balances
+        SET dollars = dollars - ?
+        WHERE vk_id = ?
+          AND dollars >= ?
+      `,
+      [safePrice, safeVkId, safePrice]
+    );
+
+    db.run(
+      `
+        INSERT INTO phone_sims (
+          vk_id,
+          phone_number,
+          rarity
+        )
+        VALUES (?, ?, ?)
+      `,
+      [safeVkId, safePhoneNumber, safeRarity]
+    );
+
+    db.run('COMMIT;');
+    persistDatabase();
+
+    return {
+      status: 'purchased',
+      sim: getPhoneSim(safeVkId),
+      price: safePrice,
+      balance: currentBalance - safePrice
+    };
+  } catch (error) {
+    try {
+      db.run('ROLLBACK;');
+    } catch {
+      // Транзакция могла не успеть начаться.
+    }
+
+    if (
+      /UNIQUE constraint failed:\s*phone_sims\.phone_number/i
+        .test(String(error?.message ?? ''))
+    ) {
+      return {
+        status: 'number_taken'
+      };
+    }
+
+    throw error;
+  }
+}
+
+function getPhoneCall(
+  vkId,
+  currentTime = Date.now()
+) {
+  ensureDatabase();
+
+  const safeVkId = validatePhoneVkId(vkId);
+
+  cleanupExpiredPhoneCalls(currentTime);
+
+  const statement = db.prepare(`
+    SELECT
+      id,
+      caller_vk_id,
+      receiver_vk_id,
+      status,
+      created_at,
+      accepted_at,
+      expires_at
+    FROM phone_calls
+    WHERE caller_vk_id = ?
+       OR receiver_vk_id = ?
+    ORDER BY id DESC
+    LIMIT 1
+  `);
+
+  statement.bind([safeVkId, safeVkId]);
+  let call = null;
+
+  if (statement.step()) {
+    call = mapPhoneCallRow(
+      statement.getAsObject(),
+      safeVkId
+    );
+  }
+
+  statement.free();
+
+  return call;
+}
+
+function getPhoneCallById(
+  callId,
+  currentTime = Date.now()
+) {
+  ensureDatabase();
+
+  const safeCallId = Number(callId);
+
+  if (
+    !Number.isInteger(safeCallId) ||
+    safeCallId <= 0
+  ) {
+    return null;
+  }
+
+  cleanupExpiredPhoneCalls(currentTime);
+
+  const statement = db.prepare(`
+    SELECT
+      id,
+      caller_vk_id,
+      receiver_vk_id,
+      status,
+      created_at,
+      accepted_at,
+      expires_at
+    FROM phone_calls
+    WHERE id = ?
+  `);
+
+  statement.bind([safeCallId]);
+  let call = null;
+
+  if (statement.step()) {
+    call = mapPhoneCallRow(
+      statement.getAsObject()
+    );
+  }
+
+  statement.free();
+
+  return call;
+}
+
+function startPhoneCall({
+  callerVkId,
+  receiverVkId,
+  currentTime = Date.now(),
+  expiresAt
+}) {
+  ensureDatabase();
+
+  const safeCallerVkId =
+    validatePhoneVkId(callerVkId);
+  const safeReceiverVkId =
+    validatePhoneVkId(receiverVkId);
+  const safeCurrentTime = Number(currentTime);
+  const safeExpiresAt = Number(expiresAt);
+
+  if (safeCallerVkId === safeReceiverVkId) {
+    return {
+      status: 'same_user'
+    };
+  }
+
+  if (
+    !Number.isSafeInteger(safeCurrentTime) ||
+    !Number.isSafeInteger(safeExpiresAt) ||
+    safeCurrentTime < 0 ||
+    safeExpiresAt <= safeCurrentTime
+  ) {
+    throw new Error(
+      'Некорректное время телефонного звонка'
+    );
+  }
+
+  cleanupExpiredPhoneCalls(safeCurrentTime);
+
+  const callerCall = getPhoneCall(
+    safeCallerVkId,
+    safeCurrentTime
+  );
+
+  if (callerCall) {
+    return {
+      status: 'caller_busy',
+      call: callerCall
+    };
+  }
+
+  const receiverCall = getPhoneCall(
+    safeReceiverVkId,
+    safeCurrentTime
+  );
+
+  if (receiverCall) {
+    return {
+      status: 'receiver_busy'
+    };
+  }
+
+  db.run(
+    `
+      INSERT INTO phone_calls (
+        caller_vk_id,
+        receiver_vk_id,
+        status,
+        created_at,
+        expires_at
+      )
+      VALUES (?, ?, 'ringing', ?, ?)
+    `,
+    [
+      safeCallerVkId,
+      safeReceiverVkId,
+      safeCurrentTime,
+      safeExpiresAt
+    ]
+  );
+
+  const callId = Number(
+    db.exec(
+      'SELECT last_insert_rowid() AS id;'
+    )[0].values[0][0]
+  );
+
+  persistDatabase();
+
+  return {
+    status: 'ringing',
+    call: getPhoneCallById(
+      callId,
+      safeCurrentTime
+    )
+  };
+}
+
+function acceptPhoneCall({
+  callId,
+  receiverVkId,
+  currentTime = Date.now(),
+  expiresAt
+}) {
+  ensureDatabase();
+
+  const safeReceiverVkId =
+    validatePhoneVkId(receiverVkId);
+  const safeCurrentTime = Number(currentTime);
+  const safeExpiresAt = Number(expiresAt);
+  const call = getPhoneCallById(
+    callId,
+    safeCurrentTime
+  );
+
+  if (!call) {
+    return {
+      status: 'not_found'
+    };
+  }
+
+  if (call.receiverVkId !== safeReceiverVkId) {
+    return {
+      status: 'not_receiver'
+    };
+  }
+
+  if (call.status !== 'ringing') {
+    return {
+      status: 'not_ringing',
+      call
+    };
+  }
+
+  if (
+    !Number.isSafeInteger(safeExpiresAt) ||
+    safeExpiresAt <= safeCurrentTime
+  ) {
+    throw new Error(
+      'Некорректное время завершения звонка'
+    );
+  }
+
+  db.run(
+    `
+      UPDATE phone_calls
+      SET status = 'active',
+          accepted_at = ?,
+          expires_at = ?
+      WHERE id = ?
+        AND receiver_vk_id = ?
+        AND status = 'ringing'
+    `,
+    [
+      safeCurrentTime,
+      safeExpiresAt,
+      Number(call.id),
+      safeReceiverVkId
+    ]
+  );
+
+  persistDatabase();
+
+  return {
+    status: 'active',
+    call: getPhoneCallById(
+      call.id,
+      safeCurrentTime
+    )
+  };
+}
+
+function declinePhoneCall({
+  callId,
+  receiverVkId,
+  currentTime = Date.now()
+}) {
+  ensureDatabase();
+
+  const safeReceiverVkId =
+    validatePhoneVkId(receiverVkId);
+  const call = getPhoneCallById(
+    callId,
+    currentTime
+  );
+
+  if (!call) {
+    return {
+      status: 'not_found'
+    };
+  }
+
+  if (
+    call.receiverVkId !== safeReceiverVkId ||
+    call.status !== 'ringing'
+  ) {
+    return {
+      status: 'not_allowed'
+    };
+  }
+
+  db.run(
+    `
+      DELETE FROM phone_calls
+      WHERE id = ?
+    `,
+    [Number(call.id)]
+  );
+  persistDatabase();
+
+  return {
+    status: 'declined',
+    call
+  };
+}
+
+function endPhoneCall({
+  callId,
+  vkId,
+  currentTime = Date.now()
+}) {
+  ensureDatabase();
+
+  const safeVkId = validatePhoneVkId(vkId);
+  const call = getPhoneCallById(
+    callId,
+    currentTime
+  );
+
+  if (!call) {
+    return {
+      status: 'not_found'
+    };
+  }
+
+  if (
+    call.callerVkId !== safeVkId &&
+    call.receiverVkId !== safeVkId
+  ) {
+    return {
+      status: 'not_allowed'
+    };
+  }
+
+  db.run(
+    `
+      DELETE FROM phone_calls
+      WHERE id = ?
+    `,
+    [Number(call.id)]
+  );
+  persistDatabase();
+
+  return {
+    status: 'ended',
+    call
+  };
+}
+
+function touchPhoneCall({
+  callId,
+  vkId,
+  currentTime = Date.now(),
+  expiresAt
+}) {
+  ensureDatabase();
+
+  const safeVkId = validatePhoneVkId(vkId);
+  const safeCurrentTime = Number(currentTime);
+  const safeExpiresAt = Number(expiresAt);
+  const call = getPhoneCallById(
+    callId,
+    safeCurrentTime
+  );
+
+  if (
+    !call ||
+    call.status !== 'active'
+  ) {
+    return {
+      status: 'not_active'
+    };
+  }
+
+  if (
+    call.callerVkId !== safeVkId &&
+    call.receiverVkId !== safeVkId
+  ) {
+    return {
+      status: 'not_allowed'
+    };
+  }
+
+  if (
+    !Number.isSafeInteger(safeExpiresAt) ||
+    safeExpiresAt <= safeCurrentTime
+  ) {
+    throw new Error(
+      'Некорректное время продления звонка'
+    );
+  }
+
+  db.run(
+    `
+      UPDATE phone_calls
+      SET expires_at = ?
+      WHERE id = ?
+        AND status = 'active'
+    `,
+    [safeExpiresAt, Number(call.id)]
+  );
+  persistDatabase();
+
+  return {
+    status: 'touched',
+    call: {
+      ...call,
+      expiresAt: safeExpiresAt
+    }
+  };
+}
+
 module.exports = {
   formatMoney,
   JOB_MAX_LEVEL,
@@ -7831,6 +9638,24 @@ module.exports = {
   upgradeFarm,
   sellFarmProduce,
   sellAllFarmProduce,
+  getLootCaseItem,
+  getLootCaseStats,
+  getLootCaseInventory,
+  purchaseLootCase,
+  sellLootCaseItem,
+  sellLootCaseGroup,
+  sellAllLootCaseItems,
+  claimLootCaseAsset,
+  getPhoneSim,
+  getPhoneSimByNumber,
+  purchasePhoneSim,
+  getPhoneCall,
+  getPhoneCallById,
+  startPhoneCall,
+  acceptPhoneCall,
+  declinePhoneCall,
+  endPhoneCall,
+  touchPhoneCall,
   getGameDebt,
   applyGamePenalty,
   applyGameReward,
@@ -7846,7 +9671,9 @@ module.exports = {
   sellAllFishingCatches,
   getBeginnerBoxStatus,
   claimBeginnerBox,
+  JOB_BOOST_DAILY_PURCHASE_LIMIT,
   getJobBoostCount,
+  getDailyJobBoostPurchaseUsage,
   purchaseMagazineItem,
   sellMagazineAsset,
   BUSINESS_MAX_UPGRADE_LEVEL,
@@ -7882,6 +9709,8 @@ module.exports = {
   hasClaimedQuest,
   claimQuestReward,
 
+  getAdminStatistics,
+  getPromoOverview,
   createPromo,
   redeemPromo
 };

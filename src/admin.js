@@ -1,3 +1,5 @@
+const { Keyboard } = require('vk-io');
+
 const {
   formatMoney,
   JOB_MAX_LEVEL,
@@ -11,14 +13,25 @@ const {
   resetTotalAura,
   getAuraRank,
   getBalance,
+  getBalanceTop,
   addBalance,
   removeBalance,
   setBalance,
   resetBalance,
   createPromo,
+  getAdminStatistics,
+  getPromoOverview,
   getGameDebt,
-  getJobProfile
+  getJobProfile,
+  getMagazineAssets,
+  getPhoneSim,
+  getPhoneCall,
+  getAuraTop
 } = require('./database');
+
+const {
+  getItem
+} = require('./magazine/catalog');
 
 /*
  * admin.js
@@ -37,6 +50,13 @@ const {
  * \addpromo MONEY ₽ 1000
  * \users
  * \sms Текст рассылки
+ * !админ
+ * \stats
+ * \topmoney
+ * \topaura
+ * \phone @username
+ * \assets @username
+ * \promos
  */
 
 const ADMIN_IDS = new Set([
@@ -252,6 +272,440 @@ async function requireAdmin(context) {
   );
 
   return false;
+}
+
+function createAdminHomeKeyboard() {
+  return Keyboard.builder()
+    .textButton({
+      label: '👥 Игроки',
+      payload: {
+        command: 'admin_section',
+        section: 'players'
+      },
+      color: Keyboard.PRIMARY_COLOR
+    })
+    .textButton({
+      label: '💰 Экономика',
+      payload: {
+        command: 'admin_section',
+        section: 'economy'
+      },
+      color: Keyboard.POSITIVE_COLOR
+    })
+    .row()
+    .textButton({
+      label: '📢 Управление',
+      payload: {
+        command: 'admin_section',
+        section: 'management'
+      },
+      color: Keyboard.SECONDARY_COLOR
+    })
+    .textButton({
+      label: '⚙ Система',
+      payload: {
+        command: 'admin_section',
+        section: 'system'
+      },
+      color: Keyboard.SECONDARY_COLOR
+    })
+    .inline();
+}
+
+function createAdminSectionKeyboard(section) {
+  const keyboard = Keyboard.builder();
+
+  if (section === 'economy') {
+    keyboard
+      .textButton({
+        label: '💵 Топ баланса',
+        payload: {
+          command: 'admin_top_money'
+        },
+        color: Keyboard.POSITIVE_COLOR
+      })
+      .textButton({
+        label: '✨ Топ ауры',
+        payload: {
+          command: 'admin_top_aura'
+        },
+        color: Keyboard.PRIMARY_COLOR
+      })
+      .row();
+  }
+
+  if (section === 'management') {
+    keyboard
+      .textButton({
+        label: '🎟 Промокоды',
+        payload: {
+          command: 'admin_promos'
+        },
+        color: Keyboard.PRIMARY_COLOR
+      })
+      .row();
+  }
+
+  if (section === 'system') {
+    keyboard
+      .textButton({
+        label: '📊 Статистика',
+        payload: {
+          command: 'admin_stats'
+        },
+        color: Keyboard.POSITIVE_COLOR
+      })
+      .textButton({
+        label: '💬 Диалоги',
+        payload: {
+          command: 'admin_dialogues'
+        },
+        color: Keyboard.PRIMARY_COLOR
+      })
+      .row();
+  }
+
+  return keyboard
+    .textButton({
+      label: '⬅ Админ-панель',
+      payload: {
+        command: 'admin_home'
+      },
+      color: Keyboard.SECONDARY_COLOR
+    })
+    .inline();
+}
+
+const ADMIN_SECTION_TEXTS = Object.freeze({
+  players:
+    '👥 Админ-панель · Игроки\n\n' +
+    '\\info @username — полная карточка игрока\n' +
+    '\\phone @username — телефон, SIM и звонок\n' +
+    '\\assets @username — имущество игрока',
+  economy:
+    '💰 Админ-панель · Экономика\n\n' +
+    'Деньги:\n' +
+    '\\add₽ @username [сумма]\n' +
+    '\\minus₽ @username [сумма]\n' +
+    '\\set₽ @username [сумма]\n' +
+    '\\reset₽ @username\n\n' +
+    'Аура:\n' +
+    '\\add @username [количество]\n' +
+    '\\minus @username [количество]\n' +
+    '\\set @username [количество]\n' +
+    '\\reset @username\n\n' +
+    '\\topmoney — топ баланса\n' +
+    '\\topaura — топ ауры',
+  management:
+    '📢 Админ-панель · Управление\n\n' +
+    '\\addpromo [код] aura [награда]\n' +
+    '\\addpromo [код] ₽ [награда]\n' +
+    '\\promos — список промокодов\n' +
+    '\\sms [текст] — рассылка по диалогам\n\n' +
+    '⚠ Рассылка запускается сразу после команды.',
+  system:
+    '⚙ Админ-панель · Система\n\n' +
+    '\\stats — расширенная статистика\n' +
+    '\\users — пользователи и беседы\n\n' +
+    'Кнопки выше открывают быстрые отчёты.'
+});
+
+async function sendAdminHome(context) {
+  if (!await requireAdmin(context)) {
+    return true;
+  }
+
+  await context.send({
+    message:
+      '🛡 Админ-панель Zaffron\n\n' +
+      'Выбери нужный раздел кнопкой ниже.\n' +
+      'Все прежние админ-команды продолжают работать.',
+    keyboard: createAdminHomeKeyboard()
+  });
+
+  return true;
+}
+
+async function sendAdminSection(
+  context,
+  section
+) {
+  if (!await requireAdmin(context)) {
+    return true;
+  }
+
+  const safeSection =
+    Object.hasOwn(ADMIN_SECTION_TEXTS, section)
+      ? section
+      : null;
+
+  if (!safeSection) {
+    return sendAdminHome(context);
+  }
+
+  await context.send({
+    message: ADMIN_SECTION_TEXTS[safeSection],
+    keyboard:
+      createAdminSectionKeyboard(safeSection)
+  });
+
+  return true;
+}
+
+function getKnownUserName(vkId) {
+  const user = getUserByVkId(vkId);
+  const name = [
+    user?.first_name,
+    user?.last_name
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  return name || `id${vkId}`;
+}
+
+function formatAdminUptime(secondsValue) {
+  let seconds = Math.max(
+    0,
+    Math.floor(Number(secondsValue) || 0)
+  );
+  const days = Math.floor(seconds / 86_400);
+  seconds %= 86_400;
+  const hours = Math.floor(seconds / 3_600);
+  seconds %= 3_600;
+  const minutes = Math.floor(seconds / 60);
+
+  return [
+    days > 0 ? `${days} д.` : null,
+    hours > 0 ? `${hours} ч.` : null,
+    minutes > 0 ? `${minutes} мин.` : null,
+    days === 0 && hours === 0 && minutes === 0
+      ? '< 1 мин.'
+      : null
+  ]
+    .filter(Boolean)
+    .slice(0, 2)
+    .join(' ');
+}
+
+async function handleAdminStats(context) {
+  if (!await requireAdmin(context)) {
+    return true;
+  }
+
+  const stats = getAdminStatistics();
+  const averageBalance = stats.users > 0
+    ? Math.floor(stats.totalBalance / stats.users)
+    : 0;
+  const memoryMb = Math.round(
+    process.memoryUsage().rss /
+    1024 /
+    1024
+  );
+
+  await context.send({
+    message:
+      '📊 Расширенная статистика Zaffron\n\n' +
+      `👥 Игроков в базе: ${stats.users}\n` +
+      `💵 Денег на руках: ${formatMoney(stats.totalBalance)} ₽\n` +
+      `🏦 Денег в банке: ${formatMoney(stats.totalBankBalance)} ₽\n` +
+      `📈 Средний баланс: ${formatMoney(averageBalance)} ₽\n` +
+      `✨ Всего ауры: ${formatMoney(stats.totalAura)}\n\n` +
+      `📦 Объектов имущества: ${stats.assets}\n` +
+      `🏢 Куплено бизнесов: ${stats.businesses}\n` +
+      `📱 Активных SIM-карт: ${stats.phoneSims}\n` +
+      `🚜 Владельцев ферм: ${stats.farmOwners}\n` +
+      `🌱 Засеяно участков: ${stats.plantedFarmPlots}\n` +
+      `💼 Активных смен: ${stats.activeJobs}\n\n` +
+      `☎ Входящих вызовов: ${stats.ringingCalls}\n` +
+      `🟢 Активных звонков: ${stats.activeCalls}\n` +
+      `🎁 Открыто платных кейсов: ${stats.lootCasesOpened}\n` +
+      `📦 Лута на складах: ${stats.lootCaseItems}\n` +
+      `💰 Стоимость лута: ${formatMoney(stats.lootCaseWarehouseValue)} ₽\n` +
+      `🎟 Промокодов: ${stats.promos}\n` +
+      `✅ Активаций промокодов: ${stats.promoRedemptions}\n\n` +
+      `⏱ Бот работает: ${formatAdminUptime(process.uptime())}\n` +
+      `🧠 Память процесса: ${memoryMb} МБ\n` +
+      `🟩 Node.js: ${process.version}`,
+    keyboard: createAdminSectionKeyboard('system')
+  });
+
+  return true;
+}
+
+async function handleAdminTopMoney(context) {
+  if (!await requireAdmin(context)) {
+    return true;
+  }
+
+  const rows = getBalanceTop(10);
+  const lines = rows.map((row, index) =>
+    `${index + 1}. @id${row.vkId} (${getKnownUserName(row.vkId)}) — ` +
+    `${formatMoney(row.balance)} ₽`
+  );
+
+  await context.send({
+    message:
+      '💵 Админский топ баланса\n\n' +
+      (lines.join('\n') || 'Игроков с положительным балансом пока нет.'),
+    keyboard: createAdminSectionKeyboard('economy')
+  });
+
+  return true;
+}
+
+async function handleAdminTopAura(context) {
+  if (!await requireAdmin(context)) {
+    return true;
+  }
+
+  const rows = getAuraTop(10);
+  const lines = rows.map((row, index) =>
+    `${index + 1}. @id${row.vk_id} (${getKnownUserName(row.vk_id)}) — ` +
+    `${formatMoney(row.aura)} ауры`
+  );
+
+  await context.send({
+    message:
+      '✨ Админский топ ауры\n\n' +
+      (lines.join('\n') || 'Игроков с аурой пока нет.'),
+    keyboard: createAdminSectionKeyboard('economy')
+  });
+
+  return true;
+}
+
+async function handleAdminPhone(
+  context,
+  vk,
+  rawTarget
+) {
+  if (!await requireAdmin(context)) {
+    return true;
+  }
+
+  const user = await resolveUser(vk, rawTarget);
+
+  if (!user) {
+    await context.reply(
+      '❌ Пользователь не найден.'
+    );
+
+    return true;
+  }
+
+  const userId = Number(user.id);
+  const phones = getMagazineAssets(userId)
+    .filter(asset =>
+      asset.itemType === 'phones'
+    )
+    .map(asset => getItem(asset.itemKey))
+    .filter(Boolean)
+    .sort((left, right) =>
+      right.price - left.price
+    );
+  const sim = getPhoneSim(userId);
+  const call = getPhoneCall(userId);
+  const formattedNumber = sim
+    ? `${sim.phoneNumber.slice(0, 3)}-${sim.phoneNumber.slice(3)}`
+    : 'Отсутствует';
+  const callText = !call
+    ? 'Нет звонка'
+    : call.status === 'active'
+      ? `Разговор с id${call.otherVkId}`
+      : call.isCaller
+        ? `Исходящий вызов id${call.otherVkId}`
+        : `Входящий вызов от id${call.otherVkId}`;
+
+  await context.send({
+    message:
+      '📱 Телефон игрока\n\n' +
+      `👤 @id${userId} (${getUserName(user)})\n` +
+      `📲 Основной телефон: ${phones[0]?.title ?? 'Отсутствует'}\n` +
+      `🛍 Телефонов: ${phones.length}\n` +
+      `📞 Номер: ${formattedNumber}\n` +
+      `✨ Тип номера: ${sim?.rarity ?? '—'}\n` +
+      `☎ Состояние: ${callText}`,
+    keyboard: createAdminSectionKeyboard('players')
+  });
+
+  return true;
+}
+
+async function handleAdminAssets(
+  context,
+  vk,
+  rawTarget
+) {
+  if (!await requireAdmin(context)) {
+    return true;
+  }
+
+  const user = await resolveUser(vk, rawTarget);
+
+  if (!user) {
+    await context.reply(
+      '❌ Пользователь не найден.'
+    );
+
+    return true;
+  }
+
+  const userId = Number(user.id);
+  const assets = getMagazineAssets(userId)
+    .map(asset => getItem(asset.itemKey))
+    .filter(Boolean);
+  const visibleAssets = assets.slice(0, 40);
+  const lines = visibleAssets.map((item, index) =>
+    `${index + 1}. ${item.categoryTitle}: ${item.title}`
+  );
+
+  if (assets.length > visibleAssets.length) {
+    lines.push(
+      `…и ещё ${assets.length - visibleAssets.length}`
+    );
+  }
+
+  await context.send({
+    message:
+      '📦 Имущество игрока\n\n' +
+      `👤 @id${userId} (${getUserName(user)})\n` +
+      `📊 Всего объектов: ${assets.length}\n\n` +
+      (lines.join('\n') || 'Имущество отсутствует.'),
+    keyboard: createAdminSectionKeyboard('players')
+  });
+
+  return true;
+}
+
+async function handleAdminPromos(context) {
+  if (!await requireAdmin(context)) {
+    return true;
+  }
+
+  const promos = getPromoOverview(20);
+  const lines = promos.map((promo, index) => {
+    const reward = promo.rewardType === 'aura'
+      ? `${formatMoney(promo.amount)} ауры`
+      : `${formatMoney(promo.amount)} ₽`;
+
+    return (
+      `${index + 1}. ${promo.code} — ${reward}\n` +
+      `   ✅ Активаций: ${promo.redemptions}`
+    );
+  });
+
+  await context.send({
+    message:
+      '🎟 Промокоды Zaffron\n\n' +
+      (lines.join('\n\n') || 'Промокоды ещё не создавались.') +
+      (promos.length >= 20
+        ? '\n\nПоказаны последние 20 промокодов.'
+        : ''),
+    keyboard: createAdminSectionKeyboard('management')
+  });
+
+  return true;
 }
 
 function delay(milliseconds) {
@@ -1073,13 +1527,93 @@ async function handle(
   const originalText =
     String(context.text ?? '')
       .trim();
+  const payload =
+    context.messagePayload;
 
   try {
+    if (payload?.command === 'admin_home') {
+      return sendAdminHome(context);
+    }
+
+    if (payload?.command === 'admin_section') {
+      return sendAdminSection(
+        context,
+        payload.section
+      );
+    }
+
+    if (payload?.command === 'admin_stats') {
+      return handleAdminStats(context);
+    }
+
+    if (payload?.command === 'admin_dialogues') {
+      return handleUsers(context, vk);
+    }
+
+    if (payload?.command === 'admin_top_money') {
+      return handleAdminTopMoney(context);
+    }
+
+    if (payload?.command === 'admin_top_aura') {
+      return handleAdminTopAura(context);
+    }
+
+    if (payload?.command === 'admin_promos') {
+      return handleAdminPromos(context);
+    }
+
+    if (
+      /^(?:!админ|\\admin)$/i
+        .test(originalText)
+    ) {
+      return sendAdminHome(context);
+    }
+
+    if (/^\\stats$/i.test(originalText)) {
+      return handleAdminStats(context);
+    }
+
+    if (/^\\topmoney$/i.test(originalText)) {
+      return handleAdminTopMoney(context);
+    }
+
+    if (/^\\topaura$/i.test(originalText)) {
+      return handleAdminTopAura(context);
+    }
+
+    if (/^\\promos$/i.test(originalText)) {
+      return handleAdminPromos(context);
+    }
+
+    let match = originalText.match(
+      /^\\phone\s+(\S+)$/i
+    );
+
+    if (match) {
+      return handleAdminPhone(
+        context,
+        vk,
+        match[1]
+      );
+    }
+
+    match = originalText.match(
+      /^\\assets\s+(\S+)$/i
+    );
+
+    if (match) {
+      return handleAdminAssets(
+        context,
+        vk,
+        match[1]
+      );
+    }
+
     if (/^\\users$/i.test(originalText)) {
       return handleUsers(context, vk);
     }
 
-    let match =
+    match =
       originalText.match(
         /^\\sms(?:\s+([\s\S]+))?$/i
       );
@@ -1230,7 +1764,7 @@ async function handle(
     }
 
     if (
-      /^\\(?:users|sms|addpromo|add[$₽]|minus[$₽]|set[$₽]|reset[$₽]|add|minus|set|reset|info)(?:\s|$)/i
+      /^\\(?:admin|stats|topmoney|topaura|phone|assets|promos|users|sms|addpromo|add[$₽]|minus[$₽]|set[$₽]|reset[$₽]|add|minus|set|reset|info)(?:\s|$)/i
         .test(originalText)
     ) {
       if (!await requireAdmin(context)) {
@@ -1244,14 +1778,21 @@ async function handle(
         '\\set @username 500\n' +
         '\\reset @username\n' +
         '\\info @username\n\n' +
+        '\\phone @username\n' +
+        '\\assets @username\n\n' +
         '\\add₽ @username 1000\n' +
         '\\minus₽ @username 1000\n' +
         '\\set₽ @username 5000\n' +
         '\\reset₽ @username\n\n' +
         '\\addpromo SUMMER aura 50\n' +
         '\\addpromo MONEY ₽ 1000\n\n' +
+        '\\promos\n' +
+        '\\stats\n' +
+        '\\topmoney\n' +
+        '\\topaura\n' +
         '\\users\n' +
-        '\\sms Текст рассылки'
+        '\\sms Текст рассылки\n\n' +
+        '!админ — открыть панель'
       );
 
       return true;

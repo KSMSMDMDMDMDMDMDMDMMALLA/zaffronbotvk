@@ -5,6 +5,7 @@ const planes = require('./planes');
 const yachts = require('./yachts');
 const boats = require('./boats');
 const boosts = require('./boosts');
+const phones = require('./phones');
 
 const categories = [
   cars,
@@ -13,6 +14,7 @@ const categories = [
   planes,
   yachts,
   boats,
+  phones,
   boosts
 ];
 
