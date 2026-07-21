@@ -32,6 +32,11 @@ const {
   getCropYieldRange
 } = require('./catalog');
 
+const {
+  getAutoWateringStatus,
+  consumeAutoWatering
+} = require('../perks');
+
 const CROP_PAGE_SIZE = 6;
 const CUSTOM_SEED_MAX_QUANTITY = 1000;
 const CUSTOM_SEED_INPUT_TTL_MS =
@@ -1462,6 +1467,21 @@ async function plantCrop(
       ? 'withered'
       : 'not_sprouted';
   const currentTime = Date.now();
+  const autoWatering = getAutoWateringStatus(
+    vkId,
+    currentTime
+  );
+
+  if (
+    autoWatering.available &&
+    yieldAmount > 0
+  ) {
+    yieldAmount = Math.max(
+      yieldAmount + 1,
+      Math.floor(yieldAmount * 125 / 100)
+    );
+  }
+
   const growTime = getCropGrowTime(
     crop,
     state.irrigationLevel
@@ -1509,6 +1529,24 @@ async function plantCrop(
     return openPlot(context, safePlotNumber);
   }
 
+  let autoWateringText = '';
+
+  if (
+    result.status === 'planted' &&
+    autoWatering.available
+  ) {
+    const consumed = consumeAutoWatering(
+      vkId,
+      currentTime
+    );
+
+    if (consumed.status === 'consumed') {
+      autoWateringText =
+        `💧 Автополив: +25% к урожаю\n` +
+        `🎟 Посадок осталось: ${consumed.charges}\n`;
+    }
+  }
+
   scheduleHarvestNotification({
     vkId,
     plotNumber: result.plotNumber,
@@ -1524,6 +1562,7 @@ async function plantCrop(
       `🌾 Посажено семян: ${result.seedQuantity}\n` +
       `⏳ КД до сбора: ${formatDuration(growTime)}\n` +
       `🎯 Шанс каждого семени: ${chances.total}%\n` +
+      autoWateringText +
       `🎒 Осталось семян: ${result.seedCount}\n\n` +
       'Каждое семя рассчитывается отдельно. Результат станет известен во время сбора.',
     keyboard: createGrowingPlotKeyboard(

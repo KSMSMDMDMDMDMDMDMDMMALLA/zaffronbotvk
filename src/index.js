@@ -27,6 +27,7 @@ const meme = require('./meme');
 const memduel = require('./memduel');
 const other = require('./other');
 const phone = require('./phone');
+const perks = require('./perks');
 const photo = require('./photo');
 const promo = require('./promo');
 const quests = require('./quests');
@@ -107,6 +108,7 @@ const commandHandlers = [
   lootCases,
   games,
   farm,
+  perks,
   bank,
   magazine,
   rental,
@@ -168,7 +170,7 @@ function createCommandsKeyboard() {
       payload: {
         command: 'commands_main'
       },
-      color: Keyboard.SECONDARY_COLOR
+      color: 'primary'
     })
     .textButton({
       label: '💵 Заработок',
@@ -191,6 +193,14 @@ function createCommandsKeyboard() {
         command: 'commands_other'
       },
       color: Keyboard.SECONDARY_COLOR
+    })
+    .row()
+    .textButton({
+      label: '🧩 Перки',
+      payload: {
+        command: 'perks_home'
+      },
+      color: Keyboard.PRIMARY_COLOR
     })
     .inline();
 }
@@ -429,6 +439,7 @@ function getCommandsSectionText(section) {
       '🎟 !promo — промокод\n' +
       '📱 !телефон — телефон и звонки\n' +
       '🎁 !кейсы — платные кейсы и склад лута\n' +
+      '🧩 !перки — полезные временные улучшения\n' +
       '📋 !команды — разделы',
     earnings:
       '💵 Заработок\n\n' +
@@ -456,23 +467,24 @@ function getCommandsSectionText(section) {
       '💣 !бомба\n' +
       '⚡ !реакция\n' +
       '🎰 !казино [ставка]\n' +
+      '🚀 !ракета [ставка]\n' +
       '🏁 !гонка — вызов\n' +
       '🔧 !тюнинг — гараж машин\n' +
-      '🤗 !обнять\n' +
-      '💋 !поцеловать\n' +
-      '🫶 !погладить\n' +
-      '🙌 !дать пять\n' +
-      '😉 !подмигнуть\n' +
-      '🤝 !пожать руку\n' +
-      '🌟 !похвалить\n' +
-      '💙 !поддержать\n' +
-      '😂 !рассмешить\n' +
-      '🍕 !угостить\n' +
-      '💐 !подарить цветы\n' +
-      '💃 !потанцевать\n' +
-      '👻 !напугать\n' +
-      '📸 !сфотографироваться\n' +
-      '🍀 !пожелать удачи\n' +
+      '🤗 !обнять [username/реплай]\n' +
+      '💋 !поцеловать [username/реплай]\n' +
+      '🫶 !погладить [username/реплай]\n' +
+      '🙌 !дать пять [username/реплай]\n' +
+      '😉 !подмигнуть [username/реплай]\n' +
+      '🤝 !пожать руку [username/реплай]\n' +
+      '🌟 !похвалить [username/реплай]\n' +
+      '💙 !поддержать [username/реплай]\n' +
+      '😂 !рассмешить [username/реплай]\n' +
+      '🍕 !угостить [username/реплай]\n' +
+      '💐 !подарить цветы [username/реплай]\n' +
+      '💃 !потанцевать [username/реплай]\n' +
+      '👻 !напугать [username/реплай]\n' +
+      '📸 !сфотографироваться [username/реплай]\n' +
+      '🍀 !пожелать удачи [username/реплай]\n' +
       '🎯 !угадай',
     other:
       '📄 Прочее\n\n' +
@@ -1219,6 +1231,7 @@ async function start() {
 
   jobs.initialize(vk);
   farm.initialize(vk);
+  perks.initialize(vk);
   communityWidget.initialize(vk);
 
   vk.updates.on(
@@ -1229,6 +1242,7 @@ async function start() {
   await vk.updates.start();
 
   console.log('Zaffron запущен и ждёт сообщения.');
+  console.log('Сборка: perks-lock-blue-v3');
   console.log('Интерфейс команд: 4 раздела, сборка 19.07.2026.');
 
   return vk;

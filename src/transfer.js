@@ -198,6 +198,7 @@ async function sendUsage(context) {
     'Или ответь на сообщение командой:\n' +
     '!передать 10.000 ₽\n\n' +
     `📤 Суточный лимит: ${formatMoney(TRANSFER_DAILY_LIMIT)} ₽`
+    + '\n🧾 Комиссия: 5% (с VIP-картой — 0%)'
   );
 
   return true;
@@ -310,7 +311,10 @@ async function handle(context, vk) {
   await context.send(
     '💸 Перевод выполнен!\n\n' +
     `👤 Получатель: @id${recipient.id} (${recipient.name})\n` +
-    `💵 Передано: ${formatMoney(result.amount)} ₽\n` +
+    `💵 Сумма перевода: ${formatMoney(result.amount)} ₽\n` +
+    `🧾 Комиссия: ${formatMoney(result.commission)} ₽` +
+    (result.vipActive ? ' (VIP: 0%)' : '') + '\n' +
+    `📥 Получатель получит: ${formatMoney(result.payout)} ₽\n` +
     `🏦 Твой баланс: ${formatMoney(result.senderBalance)} ₽\n` +
     `📤 Остаток лимита сегодня: ${formatMoney(result.dailyRemaining)} ₽\n` +
     `🕛 Сброс: ${formatResetTime(result.dailyResetAt)} МСК`

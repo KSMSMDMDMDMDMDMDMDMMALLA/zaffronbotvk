@@ -290,6 +290,99 @@ const CASES = Object.freeze([
         weight: 3
       }
     ]
+  },
+  {
+    key: 'platinum',
+    title: 'Platinum кейс',
+    shortTitle: 'Platinum',
+    emoji: '💿',
+    price: 50_000_000,
+    aliases: [
+      'platinum',
+      'платинум',
+      'платиновый',
+      'platinum кейс',
+      'платинум кейс',
+      'платиновый кейс'
+    ],
+    loot: [
+      {
+        key: 'platinum-cracked-patek',
+        title: 'Треснувшие часы Patek Philippe',
+        emoji: '⌚',
+        rarity: 'bad',
+        sellValue: 1_000_000,
+        weight: 6_790
+      },
+      {
+        key: 'platinum-broken-asic',
+        title: 'Сломанный майнинг-ASIC',
+        emoji: '🖥',
+        rarity: 'bad',
+        sellValue: 2_000_000,
+        weight: 6_790
+      },
+      {
+        key: 'platinum-empty-safe',
+        title: 'Пустой платиновый сейф',
+        emoji: '🗄',
+        rarity: 'bad',
+        sellValue: 3_000_000,
+        weight: 6_790
+      },
+      {
+        key: 'platinum-ferrari-sf90',
+        title: 'Кепка Павла Дурова',
+        emoji: '🏎',
+        rarity: 'medium',
+        sellValue: 8_000_000,
+        weight: 4_850,
+        assetKey: 'collectible-pavel-durov-cap',
+        assetType: 'collectibles'
+      },
+      {
+        key: 'platinum-ingot',
+        title: 'Платиновый слиток',
+        emoji: '🪙',
+        rarity: 'medium',
+        sellValue: 10_000_000,
+        weight: 4_850
+      },
+      {
+        key: 'platinum-mansion',
+        title: 'Особняк',
+        emoji: '🏛',
+        rarity: 'medium',
+        sellValue: 15_000_000,
+        weight: 4_850,
+        assetKey: 'house-mansion',
+        assetType: 'houses'
+      },
+      {
+        key: 'platinum-crypto-case',
+        title: 'Портфель криптовалюты',
+        emoji: '💼',
+        rarity: 'best',
+        sellValue: 80_000_000,
+        weight: 1_455
+      },
+      {
+        key: 'platinum-zaffron-crown',
+        title: 'Корона Zaffron',
+        emoji: '👑',
+        rarity: 'best',
+        sellValue: 55_000_000,
+        weight: 1_940
+      },
+      {
+        key: 'platinum-jackpot',
+        title: 'Platinum Jackpot',
+        emoji: '💰',
+        rarity: 'jackpot',
+        sellValue: 1_200_000_000,
+        weight: 1_185
+      }
+    ]
   }
 ].map(caseItem => {
   const totalWeight = caseItem.loot.reduce(

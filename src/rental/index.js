@@ -13,7 +13,23 @@ const {
   getItem
 } = require('../magazine/catalog');
 
+const {
+  getRentalIncomePerHour
+} = require('../perks');
+
 const RENTAL_PAGE_SIZE = 6;
+
+function getEffectiveRent(
+  vkId,
+  item,
+  currentTime = Date.now()
+) {
+  return getRentalIncomePerHour(
+    vkId,
+    item.rentPerHour,
+    currentTime
+  );
+}
 
 function getOwnedProperties(vkId) {
   return getMagazineAssets(vkId)
@@ -239,7 +255,11 @@ async function sendRentalHome(
     state: getPropertyRentalState({
       vkId,
       itemKey: item.key,
-      rentPerHour: item.rentPerHour,
+      rentPerHour: getEffectiveRent(
+        vkId,
+        item,
+        currentTime
+      ),
       currentTime
     })
   }));
@@ -270,7 +290,7 @@ async function sendRentalHome(
 
       return (
         `${page * RENTAL_PAGE_SIZE + index + 1}. ${item.title}\n` +
-        `   📈 Аренда: ${formatMoney(item.rentPerHour)} ₽/час\n` +
+        `   📈 Аренда: ${formatMoney(getEffectiveRent(vkId, item, currentTime))} ₽/час\n` +
         `   ${statusText}`
       );
     }
@@ -317,7 +337,7 @@ async function openRental(context, itemValue) {
   const state = getPropertyRentalState({
     vkId,
     itemKey: item.key,
-    rentPerHour: item.rentPerHour
+    rentPerHour: getEffectiveRent(vkId, item)
   });
   const rentalText =
     state.status === 'active'
@@ -335,7 +355,7 @@ async function openRental(context, itemValue) {
     message:
       `🏘 ${item.title}\n\n` +
       `💳 Стоимость: ${formatMoney(item.price)} ₽\n` +
-      `📈 Доход: ${formatMoney(item.rentPerHour)} ₽/час\n` +
+      `📈 Доход: ${formatMoney(getEffectiveRent(vkId, item))} ₽/час\n` +
       rentalText,
     keyboard: createRentalKeyboard(
       item,
@@ -360,7 +380,7 @@ async function startRental(context, itemValue) {
   const result = startPropertyRental({
     vkId,
     itemKey: item.key,
-    rentPerHour: item.rentPerHour
+    rentPerHour: getEffectiveRent(vkId, item)
   });
 
   if (result.status === 'already_active') {
@@ -381,7 +401,7 @@ async function startRental(context, itemValue) {
     message:
       '✅ Недвижимость сдана в аренду!\n\n' +
       `🏘 ${item.title}\n` +
-      `📈 Доход: ${formatMoney(item.rentPerHour)} ₽/час\n\n` +
+      `📈 Доход: ${formatMoney(getEffectiveRent(vkId, item))} ₽/час\n\n` +
       'Деньги уже начали накапливаться.',
     keyboard: createRentalKeyboard(
       item,
@@ -406,7 +426,7 @@ async function collectRent(context, itemValue) {
   const result = collectPropertyRent({
     vkId,
     itemKey: item.key,
-    rentPerHour: item.rentPerHour
+    rentPerHour: getEffectiveRent(vkId, item)
   });
 
   if (result.status === 'inactive') {
@@ -450,7 +470,7 @@ async function collectRent(context, itemValue) {
   const state = getPropertyRentalState({
     vkId,
     itemKey: item.key,
-    rentPerHour: item.rentPerHour
+    rentPerHour: getEffectiveRent(vkId, item)
   });
 
   await context.send({
@@ -481,7 +501,10 @@ async function collectAllRent(context) {
     vkId,
     properties: properties.map(item => ({
       itemKey: item.key,
-      rentPerHour: item.rentPerHour
+      rentPerHour: getEffectiveRent(
+        vkId,
+        item
+      )
     }))
   });
 

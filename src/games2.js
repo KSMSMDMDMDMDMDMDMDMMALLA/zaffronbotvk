@@ -1,12 +1,17 @@
 const {
   formatMoney,
   getBalance,
+  removeBalance,
   applyGamePenalty,
   applyGameReward,
   incrementQuestStat
 } = require('./database');
 
 const crypto = require('node:crypto');
+const { Keyboard } = require('vk-io');
+const {
+  tryInsuranceRefund
+} = require('./perks');
 
 /*
  * games2.js
@@ -18,6 +23,7 @@ const crypto = require('node:crypto');
  * 4. !кейс
  * 5. !казино <ставка>
  * 6. !угадай / !число <1-20>
+ * 7. !ракета <ставка>
  */
 
 /*
@@ -38,36 +44,126 @@ const REACTION_COOLDOWN =
 const CASINO_COOLDOWN =
   3 * 1000;
 
+const CASINO_INSURANCE_AFTER_LOSSES = 3;
+
 /*
  * Казино должно выводить деньги из экономики,
  * а не бесконечно создавать их.
  *
  * Вероятности:
- *  - x0–x0.4            — 18%
- *  - x0.5–x0.9          — 27%
+ *  - x0                 — 25%
+ *  - x0.5               — 26%
  *  - x1                 — 15%
- *  - x1.1–x1.5          — 32%
- *  - x1.6–x2            — 7%
- *  - x2.1–x3            — 1%
+ *  - x1.5               — 21%
+ *  - x2                 — 4%
+ *  - x3                 — 8%
+ *  - x5                 — 0.9%
+ *  - x10                — 0.1%
  *
- * Средняя выплата составляет x0.9425.
+ * Средняя выплата составляет x0.97.
  */
-const CASINO_MULTIPLIER_BRACKETS =
+const CASINO_OUTCOMES =
   Object.freeze([
-    { weight: 1800, min: 0, max: 4 },
-    { weight: 2700, min: 5, max: 9 },
-    { weight: 1500, min: 10, max: 10 },
-    { weight: 3200, min: 11, max: 15 },
-    { weight: 700, min: 16, max: 20 },
-    { weight: 100, min: 21, max: 30 }
+    {
+      multiplierTenths: 0,
+      weight: 2500,
+      title: '💥 Полный проигрыш'
+    },
+    {
+      multiplierTenths: 5,
+      weight: 2600,
+      title: '📉 Вернулась половина ставки'
+    },
+    {
+      multiplierTenths: 10,
+      weight: 1500,
+      title: '➖ Ставка вернулась'
+    },
+    {
+      multiplierTenths: 15,
+      weight: 2100,
+      title: '✨ Небольшой выигрыш'
+    },
+    {
+      multiplierTenths: 20,
+      weight: 400,
+      title: '💰 Хороший выигрыш'
+    },
+    {
+      multiplierTenths: 30,
+      weight: 800,
+      title: '🔥 Крупный выигрыш'
+    },
+    {
+      multiplierTenths: 50,
+      weight: 90,
+      title: '💎 Редкий выигрыш'
+    },
+    {
+      multiplierTenths: 100,
+      weight: 10,
+      title: '👑 ДЖЕКПОТ'
+    }
   ]);
 
 const CASINO_TOTAL_WEIGHT =
-  CASINO_MULTIPLIER_BRACKETS.reduce(
-    (total, bracket) =>
-      total + bracket.weight,
+  CASINO_OUTCOMES.reduce(
+    (total, outcome) =>
+      total + outcome.weight,
     0
   );
+
+const ROCKET_MIN_BET = 1_000;
+const ROCKET_MAX_BET = 1_000_000_000;
+const ROCKET_DECISION_TIMEOUT =
+  10 * 60 * 1000;
+
+/*
+ * Вероятность дойти до любой ступени подобрана
+ * так, чтобы выплата на ней имела RTP 96%.
+ */
+const ROCKET_STAGES = Object.freeze([
+  {
+    multiplierHundredths: 120,
+    surviveWeight: 4,
+    totalWeight: 5
+  },
+  {
+    multiplierHundredths: 150,
+    surviveWeight: 4,
+    totalWeight: 5
+  },
+  {
+    multiplierHundredths: 200,
+    surviveWeight: 3,
+    totalWeight: 4
+  },
+  {
+    multiplierHundredths: 300,
+    surviveWeight: 2,
+    totalWeight: 3
+  },
+  {
+    multiplierHundredths: 500,
+    surviveWeight: 3,
+    totalWeight: 5
+  },
+  {
+    multiplierHundredths: 1_000,
+    surviveWeight: 1,
+    totalWeight: 2
+  },
+  {
+    multiplierHundredths: 2_500,
+    surviveWeight: 2,
+    totalWeight: 5
+  },
+  {
+    multiplierHundredths: 10_000,
+    surviveWeight: 1,
+    totalWeight: 4
+  }
+]);
 
 const GUESS_COOLDOWN =
   5 * 60 * 1000;
@@ -104,6 +200,9 @@ const gameCooldowns = {
   guess: new Map()
 };
 
+const casinoLossStreaks = new Map();
+const rocketGames = new Map();
+
 /*
  * Активные игры по peerId.
  */
@@ -125,8 +224,10 @@ function randomInteger(min, max) {
   ) + min;
 }
 
-function getCasinoMultiplierTenths() {
-  const roll = crypto.randomInt(
+function getCasinoOutcome(
+  randomIntegerFunction = crypto.randomInt
+) {
+  const roll = randomIntegerFunction(
     0,
     CASINO_TOTAL_WEIGHT
   );
@@ -134,26 +235,621 @@ function getCasinoMultiplierTenths() {
   let accumulatedWeight = 0;
 
   for (
-    const bracket of
-      CASINO_MULTIPLIER_BRACKETS
+    const outcome of
+      CASINO_OUTCOMES
   ) {
-    accumulatedWeight += bracket.weight;
+    accumulatedWeight += outcome.weight;
 
     if (roll >= accumulatedWeight) {
       continue;
     }
 
-    if (bracket.min === bracket.max) {
-      return bracket.min;
+    return outcome;
+  }
+
+  return CASINO_OUTCOMES.at(-1);
+}
+
+function getCasinoRound(
+  lossStreak,
+  randomIntegerFunction = crypto.randomInt
+) {
+  const safeLossStreak = Math.max(
+    0,
+    Number.isInteger(Number(lossStreak))
+      ? Number(lossStreak)
+      : 0
+  );
+  const insuranceActivated =
+    safeLossStreak >=
+      CASINO_INSURANCE_AFTER_LOSSES;
+  const outcome = insuranceActivated
+    ? CASINO_OUTCOMES.find(item =>
+      item.multiplierTenths === 10
+    )
+    : getCasinoOutcome(
+      randomIntegerFunction
+    );
+
+  return {
+    outcome,
+    insuranceActivated
+  };
+}
+
+function formatCasinoMultiplier(
+  multiplierTenths
+) {
+  const multiplier =
+    multiplierTenths / 10;
+
+  return Number.isInteger(multiplier)
+    ? String(multiplier)
+    : multiplier.toFixed(1);
+}
+
+function formatCasinoChance(weight) {
+  return (weight / 100)
+    .toFixed(2)
+    .replace('.', ',')
+    .replace(/,00$/, '')
+    .replace(/0$/, '');
+}
+
+function createCasinoRepeatKeyboard(bet) {
+  return Keyboard.builder()
+    .textButton({
+      label: '🎰 Повторить ставку',
+      payload: {
+        command: 'casino_repeat_bet',
+        bet
+      },
+      color: Keyboard.POSITIVE_COLOR
+    })
+    .inline();
+}
+
+async function sendCasinoChances(context) {
+  const lines = CASINO_OUTCOMES.map(
+    outcome =>
+      `x${formatCasinoMultiplier(outcome.multiplierTenths)} — ` +
+      `${formatCasinoChance(outcome.weight)}% • ${outcome.title}`
+  );
+
+  await context.send(
+    '🎰 Шансы казино Zaffron\n\n' +
+    `${lines.join('\n')}\n\n` +
+    '📊 Средняя отдача игроку: 97%\n' +
+    '🏦 Преимущество казино: 3%\n' +
+    '🔥 x3 выпадает примерно раз в 12–13 игр.\n\n' +
+    '🛡 Страховка серии: после трёх результатов ниже x1 следующая ставка гарантированно получает x1.'
+  );
+
+  return true;
+}
+
+function formatRocketMultiplier(
+  multiplierHundredths
+) {
+  const multiplier =
+    multiplierHundredths / 100;
+
+  return Number.isInteger(multiplier)
+    ? String(multiplier)
+    : multiplier.toFixed(2)
+      .replace(/0$/, '');
+}
+
+function formatRocketPercent(value) {
+  return Number(value)
+    .toFixed(2)
+    .replace('.', ',')
+    .replace(/,00$/, '')
+    .replace(/,(\d)0$/, ',$1');
+}
+
+function getRocketStageChance(stage) {
+  return stage.surviveWeight /
+    stage.totalWeight * 100;
+}
+
+function getRocketReachChance(stageIndex) {
+  let chance = 1;
+
+  for (
+    let index = 0;
+    index <= stageIndex;
+    index += 1
+  ) {
+    const stage = ROCKET_STAGES[index];
+    chance *= stage.surviveWeight /
+      stage.totalWeight;
+  }
+
+  return chance * 100;
+}
+
+function rollRocketStage(
+  stage,
+  randomIntegerFunction = crypto.randomInt
+) {
+  return randomIntegerFunction(
+    0,
+    stage.totalWeight
+  ) < stage.surviveWeight;
+}
+
+function getRocketGameKey(userId) {
+  return String(Number(userId));
+}
+
+function clearRocketTimer(game) {
+  if (game?.timer) {
+    clearTimeout(game.timer);
+    game.timer = null;
+  }
+}
+
+function finishRocketGame(game) {
+  clearRocketTimer(game);
+  game.finished = true;
+  rocketGames.delete(game.key);
+}
+
+function refundActiveRocketGames() {
+  for (const game of [
+    ...rocketGames.values()
+  ]) {
+    if (game.finished) {
+      continue;
     }
 
-    return crypto.randomInt(
-      bracket.min,
-      bracket.max + 1
+    try {
+      finishRocketGame(game);
+      applyGameReward(
+        game.userId,
+        game.bet
+      );
+    } catch (error) {
+      console.error(
+        'Не удалось вернуть ставку активной ракеты при остановке:',
+        error
+      );
+    }
+  }
+}
+
+function handleRocketShutdown() {
+  refundActiveRocketGames();
+  process.exit(0);
+}
+
+process.once(
+  'SIGINT',
+  handleRocketShutdown
+);
+
+process.once(
+  'SIGTERM',
+  handleRocketShutdown
+);
+
+function createRocketDecisionKeyboard(game) {
+  const stage = ROCKET_STAGES[game.stageIndex];
+  const payout = Math.floor(
+    game.bet * stage.multiplierHundredths / 100
+  );
+
+  return Keyboard.builder()
+    .textButton({
+      label:
+        `💰 Забрать ${formatMoney(payout)} ₽`,
+      payload: {
+        command: 'rocket_cashout',
+        gameId: game.id
+      },
+      color: Keyboard.POSITIVE_COLOR
+    })
+    .textButton({
+      label: '🚀 Лететь дальше',
+      payload: {
+        command: 'rocket_continue',
+        gameId: game.id
+      },
+      color: Keyboard.PRIMARY_COLOR
+    })
+    .inline();
+}
+
+function createRocketRepeatKeyboard(bet) {
+  return Keyboard.builder()
+    .textButton({
+      label: '🚀 Повторить ставку',
+      payload: {
+        command: 'rocket_repeat',
+        bet
+      },
+      color: Keyboard.POSITIVE_COLOR
+    })
+    .inline();
+}
+
+function getRocketStateMessage(game) {
+  const stage = ROCKET_STAGES[game.stageIndex];
+  const nextStage =
+    ROCKET_STAGES[game.stageIndex + 1];
+  const payout = Math.floor(
+    game.bet * stage.multiplierHundredths / 100
+  );
+
+  return (
+    '🚀 Ракета набирает высоту!\n\n' +
+    `✅ Текущий множитель: x${formatRocketMultiplier(stage.multiplierHundredths)}\n` +
+    `💵 Ставка: ${formatMoney(game.bet)} ₽\n` +
+    `💰 Можно забрать: ${formatMoney(payout)} ₽\n\n` +
+    `🎯 Следующая цель: x${formatRocketMultiplier(nextStage.multiplierHundredths)}\n` +
+    `📊 Шанс долететь: ${formatRocketPercent(getRocketStageChance(nextStage))}%\n\n` +
+    'Выбирай: забрать деньги или рискнуть всем.\n' +
+    '⏳ На решение даётся 10 минут.'
+  );
+}
+
+function settleRocketCashout(game) {
+  const stage = ROCKET_STAGES[game.stageIndex];
+  const payout = Math.floor(
+    game.bet * stage.multiplierHundredths / 100
+  );
+  const profit = payout - game.bet;
+
+  finishRocketGame(game);
+
+  return {
+    stage,
+    payout,
+    profit,
+    reward: applyGameReward(
+      game.userId,
+      payout
+    )
+  };
+}
+
+function scheduleRocketTimeout(game, vk) {
+  clearRocketTimer(game);
+
+  game.timer = setTimeout(
+    async () => {
+      const current =
+        rocketGames.get(game.key);
+
+      if (
+        !current ||
+        current !== game ||
+        game.finished
+      ) {
+        return;
+      }
+
+      const result =
+        settleRocketCashout(game);
+
+      if (!vk?.api?.messages?.send) {
+        return;
+      }
+
+      await sendMessage(
+        vk,
+        game.peerId,
+        '⌛ Время на решение истекло.\n\n' +
+        'Ракета автоматически зафиксировала выигрыш.\n' +
+        `🚀 Множитель: x${formatRocketMultiplier(result.stage.multiplierHundredths)}\n` +
+        `💰 Выплата: ${formatMoney(result.payout)} ₽\n` +
+        `📈 Чистая прибыль: +${formatMoney(result.profit)} ₽\n\n` +
+        formatGameReward(result.reward)
+      ).catch(console.error);
+    },
+    ROCKET_DECISION_TIMEOUT
+  );
+
+  game.timer.unref?.();
+}
+
+async function sendRocketChances(context) {
+  const lines = ROCKET_STAGES.map(
+    (stage, index) =>
+      `x${formatRocketMultiplier(stage.multiplierHundredths)} — ` +
+      `этап ${formatRocketPercent(getRocketStageChance(stage))}%` +
+      ` • дойти ${formatRocketPercent(getRocketReachChance(index))}%`
+  );
+
+  await context.send(
+    '🚀 Шансы игры «Ракета»\n\n' +
+    `${lines.join('\n')}\n\n` +
+    '📊 RTP любой выбранной ступени: 96%\n' +
+    `💵 Ставка: от ${formatMoney(ROCKET_MIN_BET)} до ${formatMoney(ROCKET_MAX_BET)} ₽\n` +
+    'На каждой ступени можно забрать деньги или полететь дальше.'
+  );
+
+  return true;
+}
+
+async function cashoutRocket(
+  context,
+  gameId
+) {
+  const key = getRocketGameKey(
+    context.senderId
+  );
+  const game = rocketGames.get(key);
+
+  if (
+    !game ||
+    game.finished ||
+    game.id !== String(gameId ?? '') ||
+    game.stageIndex < 0
+  ) {
+    await context.reply(
+      '❌ Эта игра в «Ракету» уже завершена.'
+    );
+
+    return true;
+  }
+
+  const result = settleRocketCashout(game);
+
+  await context.send({
+    message:
+      '💰 Выигрыш зафиксирован!\n\n' +
+      `🚀 Множитель: x${formatRocketMultiplier(result.stage.multiplierHundredths)}\n` +
+      `💵 Ставка: ${formatMoney(game.bet)} ₽\n` +
+      `💰 Выплата: ${formatMoney(result.payout)} ₽\n` +
+      `📈 Чистая прибыль: +${formatMoney(result.profit)} ₽\n\n` +
+      formatGameReward(result.reward),
+    keyboard: createRocketRepeatKeyboard(
+      game.bet
+    )
+  });
+
+  return true;
+}
+
+async function continueRocket(
+  context,
+  gameId,
+  vk
+) {
+  const key = getRocketGameKey(
+    context.senderId
+  );
+  const game = rocketGames.get(key);
+
+  if (
+    !game ||
+    game.finished ||
+    game.id !== String(gameId ?? '')
+  ) {
+    await context.reply(
+      '❌ Эта игра в «Ракету» уже завершена.'
+    );
+
+    return true;
+  }
+
+  clearRocketTimer(game);
+
+  const nextStageIndex =
+    game.stageIndex + 1;
+  const nextStage =
+    ROCKET_STAGES[nextStageIndex];
+
+  if (!nextStage) {
+    return cashoutRocket(
+      context,
+      game.id
     );
   }
 
-  return 0;
+  if (!rollRocketStage(nextStage)) {
+    const previousStage = game.stageIndex >= 0
+      ? ROCKET_STAGES[game.stageIndex]
+      : null;
+
+    const perkInsurance =
+      tryInsuranceRefund(
+        game.userId,
+        game.bet
+      );
+
+    let insuranceText = '';
+
+    if (perkInsurance.status === 'refunded') {
+      const rewardResult = applyGameReward(
+        game.userId,
+        perkInsurance.refund
+      );
+
+      insuranceText =
+        '\n🛡 Страховка сработала: ' +
+        `возврат ${formatMoney(perkInsurance.refund)} ₽\n` +
+        `🎟 Осталось покрытия: ${formatMoney(perkInsurance.charges)} ₽\n` +
+        `${formatGameReward(rewardResult)}\n`;
+    } else if (
+      perkInsurance.status === 'not_triggered'
+    ) {
+      insuranceText =
+        '\n🛡 Страховка не сработала: шанс 50/50.\n';
+    }
+
+    finishRocketGame(game);
+
+    await context.send({
+      message:
+        '💥 Ракета взорвалась!\n\n' +
+        `🎯 Цель была: x${formatRocketMultiplier(nextStage.multiplierHundredths)}\n` +
+        (previousStage
+          ? `🚀 Ты добрался до x${formatRocketMultiplier(previousStage.multiplierHundredths)}\n`
+          : '') +
+        `📉 Потеряно: ${formatMoney(game.bet)} ₽\n` +
+        insuranceText +
+        `🏦 Баланс: ${formatMoney(getBalance(game.userId))} ₽`,
+      keyboard: createRocketRepeatKeyboard(
+        game.bet
+      )
+    });
+
+    return true;
+  }
+
+  game.stageIndex = nextStageIndex;
+
+  if (
+    nextStageIndex ===
+      ROCKET_STAGES.length - 1
+  ) {
+    const result =
+      settleRocketCashout(game);
+
+    await context.send({
+      message:
+        '👑 РАКЕТА ДОСТИГЛА МАКСИМУМА!\n\n' +
+        `🚀 Множитель: x${formatRocketMultiplier(result.stage.multiplierHundredths)}\n` +
+        `💵 Ставка: ${formatMoney(game.bet)} ₽\n` +
+        `💰 Выплата: ${formatMoney(result.payout)} ₽\n` +
+        `📈 Чистая прибыль: +${formatMoney(result.profit)} ₽\n\n` +
+        formatGameReward(result.reward),
+      keyboard: createRocketRepeatKeyboard(
+        game.bet
+      )
+    });
+
+    return true;
+  }
+
+  scheduleRocketTimeout(game, vk);
+
+  await context.send({
+    message: getRocketStateMessage(game),
+    keyboard: createRocketDecisionKeyboard(game)
+  });
+
+  return true;
+}
+
+async function startRocket(
+  context,
+  rawBet,
+  vk
+) {
+  const userId = Number(context.senderId);
+  const key = getRocketGameKey(userId);
+  const activeGame = rocketGames.get(key);
+
+  if (activeGame && !activeGame.finished) {
+    if (activeGame.stageIndex < 0) {
+      await context.reply(
+        '🚀 Ракета уже запускается. Подожди результат первого этапа.'
+      );
+
+      return true;
+    }
+
+    await context.send({
+      message:
+        '🚀 У тебя уже запущена ракета.\n\n' +
+        getRocketStateMessage(activeGame),
+      keyboard:
+        createRocketDecisionKeyboard(activeGame)
+    });
+
+    return true;
+  }
+
+  const balance = getBalance(userId);
+  const normalizedBet = String(rawBet ?? '')
+    .trim()
+    .toLowerCase();
+  const isAllIn = [
+    'всё',
+    'все',
+    'all'
+  ].includes(normalizedBet);
+  const amountText = normalizedBet
+    .replace(/[$₽]$/, '')
+    .trim();
+  const bet = isAllIn
+    ? Math.min(balance, ROCKET_MAX_BET)
+    : /^\d[\d\s.,_]*$/.test(amountText)
+      ? Number(
+        amountText.replace(/[\s.,_]/g, '')
+      )
+      : NaN;
+
+  if (
+    !Number.isSafeInteger(bet) ||
+    bet < ROCKET_MIN_BET
+  ) {
+    await context.reply(
+      '❌ Укажи корректную ставку.\n\n' +
+      `Минимум: ${formatMoney(ROCKET_MIN_BET)} ₽\n` +
+      `Максимум: ${formatMoney(ROCKET_MAX_BET)} ₽\n\n` +
+      'Примеры:\n' +
+      '!ракета 100.000\n' +
+      '!ракета всё'
+    );
+
+    return true;
+  }
+
+  if (bet > ROCKET_MAX_BET) {
+    await context.reply(
+      '❌ Ставка превышает лимит «Ракеты».\n\n' +
+      `Максимум: ${formatMoney(ROCKET_MAX_BET)} ₽`
+    );
+
+    return true;
+  }
+
+  if (balance < bet) {
+    await context.reply(
+      '❌ Недостаточно денег.\n\n' +
+      `💵 Баланс: ${formatMoney(balance)} ₽\n` +
+      `🚀 Ставка: ${formatMoney(bet)} ₽`
+    );
+
+    return true;
+  }
+
+  const payment = removeBalance(
+    userId,
+    bet
+  );
+
+  if (payment.removed !== bet) {
+    await context.reply(
+      '❌ Не удалось зарезервировать ставку.'
+    );
+
+    return true;
+  }
+
+  const game = {
+    id: crypto.randomBytes(8).toString('hex'),
+    key,
+    userId,
+    peerId: Number(context.peerId),
+    bet,
+    stageIndex: -1,
+    finished: false,
+    timer: null
+  };
+
+  rocketGames.set(key, game);
+
+  return continueRocket(
+    context,
+    game.id,
+    vk
+  );
 }
 
 function getPlayerKey(peerId, userId) {
@@ -1260,11 +1956,13 @@ async function playCasino(
     'casino_played'
   );
 
-  const multiplierTenths =
-    getCasinoMultiplierTenths();
+  const round = getCasinoRound(
+    casinoLossStreaks.get(casinoKey) ?? 0
+  );
+  const outcome = round.outcome;
 
-  const multiplier =
-    multiplierTenths / 10;
+  const multiplierTenths =
+    outcome.multiplierTenths;
 
   const payout = Math.floor(
     bet * multiplierTenths / 10
@@ -1314,26 +2012,66 @@ async function playCasino(
       'casino_losses'
     );
 
-    const penaltyResult = applyGamePenalty(
-      userId,
-      Math.abs(netResult)
+    const originalLoss = Math.abs(netResult);
+    const perkInsurance =
+      tryInsuranceRefund(
+        userId,
+        originalLoss
+      );
+    const refunded = perkInsurance.status === 'refunded'
+      ? perkInsurance.refund
+      : 0;
+    const finalLoss = Math.max(
+      0,
+      originalLoss - refunded
     );
+    const penaltyResult = finalLoss > 0
+      ? applyGamePenalty(
+        userId,
+        finalLoss
+      )
+      : {
+        balance: getBalance(userId)
+      };
 
-    resultTitle =
-      `📉 Чистый проигрыш: -${formatMoney(Math.abs(netResult))} ₽`;
+    resultTitle = refunded > 0
+      ? `🛡 Страховка вернула ${formatMoney(refunded)} ₽\n` +
+        `🎟 Осталось покрытия: ${formatMoney(perkInsurance.charges)} ₽\n` +
+        `📉 Итоговый проигрыш: -${formatMoney(finalLoss)} ₽`
+      : `📉 Чистый проигрыш: -${formatMoney(originalLoss)} ₽` +
+        (perkInsurance.status === 'not_triggered'
+          ? '\n🛡 Страховка не сработала: шанс 50/50.'
+          : '');
 
     settlementText =
       `🏦 Баланс: ${formatMoney(penaltyResult.balance)} ₽`;
   }
 
-  await context.send(
-    '🎰 Казино Zaffron\n\n' +
-    `🎲 Множитель: x${multiplier.toFixed(1)}\n` +
-    `💵 Ставка: ${formatMoney(bet)} ₽\n` +
-    `💰 Выплата: ${formatMoney(payout)} ₽\n` +
-    `${resultTitle}\n\n` +
-    settlementText
-  );
+  if (multiplierTenths < 10) {
+    casinoLossStreaks.set(
+      casinoKey,
+      (casinoLossStreaks.get(casinoKey) ?? 0) + 1
+    );
+  } else {
+    casinoLossStreaks.delete(casinoKey);
+  }
+
+  const insuranceText = round.insuranceActivated
+    ? '🛡 Сработала страховка после трёх проигрышей: ставка полностью возвращена.\n'
+    : '';
+
+  await context.send({
+    message:
+      '🎰 Казино Zaffron\n\n' +
+      insuranceText +
+      `${outcome.title}\n` +
+      `🎲 Множитель: x${formatCasinoMultiplier(multiplierTenths)}\n` +
+      `💵 Ставка: ${formatMoney(bet)} ₽\n` +
+      `💰 Выплата: ${formatMoney(payout)} ₽\n` +
+      `${resultTitle}\n\n` +
+      settlementText,
+    keyboard: createCasinoRepeatKeyboard(bet)
+  });
 
   return true;
 }
@@ -1556,6 +2294,37 @@ async function handle(
   const originalText =
     String(context.text ?? '')
       .trim();
+  const payload = context.messagePayload;
+
+  if (payload?.command === 'casino_repeat_bet') {
+    return playCasino(
+      context,
+      String(payload.bet ?? '')
+    );
+  }
+
+  if (payload?.command === 'rocket_continue') {
+    return continueRocket(
+      context,
+      payload.gameId,
+      vk
+    );
+  }
+
+  if (payload?.command === 'rocket_cashout') {
+    return cashoutRocket(
+      context,
+      payload.gameId
+    );
+  }
+
+  if (payload?.command === 'rocket_repeat') {
+    return startRocket(
+      context,
+      String(payload.bet ?? ''),
+      vk
+    );
+  }
 
   /*
    * Горячая картошка
@@ -1630,6 +2399,13 @@ async function handle(
   /*
    * Казино
    */
+  if (
+    /^!(?:шансы\s+казино|казино\s+шансы)$/i
+      .test(originalText)
+  ) {
+    return sendCasinoChances(context);
+  }
+
   const casinoMatch =
     originalText.match(
       /^!казино(?:\s+(.+))?$/i
@@ -1639,6 +2415,28 @@ async function handle(
     return playCasino(
       context,
       casinoMatch[1]
+    );
+  }
+
+  /*
+   * Ракета
+   */
+  if (
+    /^!(?:шансы\s+ракеты|ракета\s+шансы)$/i
+      .test(originalText)
+  ) {
+    return sendRocketChances(context);
+  }
+
+  const rocketMatch = originalText.match(
+    /^!ракета(?:\s+(.+))?$/i
+  );
+
+  if (rocketMatch) {
+    return startRocket(
+      context,
+      rocketMatch[1],
+      vk
     );
   }
 
@@ -1668,5 +2466,13 @@ async function handle(
 }
 
 module.exports = {
-  handle
+  handle,
+  CASINO_OUTCOMES,
+  CASINO_INSURANCE_AFTER_LOSSES,
+  ROCKET_STAGES,
+  getCasinoOutcome,
+  getCasinoRound,
+  rollRocketStage,
+  getRocketReachChance,
+  refundActiveRocketGames
 };

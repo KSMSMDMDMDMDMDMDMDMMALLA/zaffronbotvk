@@ -50,9 +50,10 @@ const COMMANDS = Object.freeze([
   },
   { command: '!коробка', usage: '!коробка' },
   { command: '!кейсы', usage: '!кейсы' },
+  { command: '!перки', usage: '!перки' },
   {
     command: '!кейс',
-    usage: '!кейс [бронзовый/серебряный/алмазный]',
+    usage: '!кейс [бронзовый/серебряный/алмазный/Platinum]',
     acceptsArguments: true
   },
   {
@@ -111,6 +112,19 @@ const COMMANDS = Object.freeze([
     command: '!казино',
     usage: '!казино [ставка/всё]',
     acceptsArguments: true
+  },
+  {
+    command: '!шансы казино',
+    usage: '!шансы казино'
+  },
+  {
+    command: '!ракета',
+    usage: '!ракета [ставка/всё]',
+    acceptsArguments: true
+  },
+  {
+    command: '!шансы ракеты',
+    usage: '!шансы ракеты'
   },
   {
     command: '!гонка',

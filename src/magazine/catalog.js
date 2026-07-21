@@ -7,6 +7,21 @@ const boats = require('./boats');
 const boosts = require('./boosts');
 const phones = require('./phones');
 
+const specialAssets = Object.freeze([
+  Object.freeze({
+    key: 'collectible-pavel-durov-cap',
+    title: 'Кепка Павла Дурова',
+    price: 8_000_000,
+    categoryKey: 'collectibles',
+    categoryTitle: 'Коллекции',
+    caseExclusive: true,
+    aliases: [
+      'кепка павла дурова',
+      'кепка дурова'
+    ]
+  })
+]);
+
 const categories = [
   cars,
   houses,
@@ -66,6 +81,21 @@ for (const category of categories) {
         catalogItem
       );
     }
+  }
+}
+
+for (const item of specialAssets) {
+  itemsByKey.set(item.key, item);
+
+  for (const alias of [
+    item.key,
+    item.title,
+    ...item.aliases
+  ]) {
+    itemsByAlias.set(
+      normalizeName(alias),
+      item
+    );
   }
 }
 

@@ -55,6 +55,18 @@ function getLootAppearance(lootKey, rarity) {
   };
 }
 
+function getClaimAssetButtonLabel(item) {
+  if (item.assetType === 'cars') {
+    return '🚗 Забрать машину';
+  }
+
+  if (item.assetType === 'houses') {
+    return '🏠 Забрать в имущество';
+  }
+
+  return '🎩 Забрать в имущество';
+}
+
 function createCasesHomeKeyboard() {
   const keyboard = Keyboard.builder();
 
@@ -71,6 +83,13 @@ function createCasesHomeKeyboard() {
           ? Keyboard.PRIMARY_COLOR
           : Keyboard.POSITIVE_COLOR
     });
+
+    if (
+      index % 2 === 1 &&
+      index < CASES.length - 1
+    ) {
+      keyboard.row();
+    }
   });
 
   return keyboard
@@ -140,9 +159,7 @@ function createDropKeyboard(item) {
     keyboard
       .row()
       .textButton({
-        label: item.assetType === 'cars'
-          ? '🚗 Забрать машину'
-          : '🏠 Забрать в имущество',
+        label: getClaimAssetButtonLabel(item),
         payload: {
           command: 'loot_case_claim_asset',
           itemId: item.id
@@ -276,9 +293,7 @@ function createInventoryItemKeyboard(
     keyboard
       .row()
       .textButton({
-        label: item.assetType === 'cars'
-          ? '🚗 Забрать машину'
-          : '🏠 Забрать в имущество',
+        label: getClaimAssetButtonLabel(item),
         payload: {
           command: 'loot_case_claim_asset',
           itemId: item.id
@@ -772,7 +787,9 @@ async function claimAsset(context, itemId) {
       `🎁 ${result.item.title}\n` +
       (result.item.assetType === 'cars'
         ? '🚗 Машина доступна в профиле, тюнинге и гонках.'
-        : '🏠 Недвижимость доступна в профиле и разделе аренды.'),
+        : result.item.assetType === 'houses'
+          ? '🏠 Недвижимость доступна в профиле и разделе аренды.'
+          : '🎩 Коллекционный предмет доступен в профиле и имуществе.'),
     keyboard: createCasesHomeKeyboard()
   });
 

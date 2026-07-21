@@ -23,6 +23,7 @@ const BEGINNER_BOX_MAX_LEVEL = 3;
 const BEGINNER_BOX_COOLDOWN_MS =
   10 * 60 * 1000;
 const TRANSFER_DAILY_LIMIT = 5_000_000;
+const TRANSFER_COMMISSION_BPS = 500;
 const JOB_BOOST_DAILY_PURCHASE_LIMIT = 5;
 const FARM_MAX_PLOTS = 8;
 const FARM_MAX_UPGRADE_LEVEL = 5;
@@ -404,6 +405,30 @@ async function initializeDatabase() {
 
       CHECK (quantity >= 0)
     );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS user_perks (
+      vk_id INTEGER NOT NULL,
+      perk_key TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      charges INTEGER NOT NULL DEFAULT 0,
+      purchased_at INTEGER NOT NULL,
+
+      PRIMARY KEY (
+        vk_id,
+        perk_key
+      ),
+
+      CHECK (expires_at >= 0),
+      CHECK (charges >= 0),
+      CHECK (purchased_at >= 0)
+    );
+  `);
+
+  db.run(`
+    CREATE INDEX IF NOT EXISTS user_perks_active_index
+    ON user_perks (perk_key, expires_at);
   `);
 
   db.run(`
@@ -1507,6 +1532,356 @@ function removeBalance(vkId, amount) {
   };
 }
 
+function validatePerkIdentity(vkId, perkKey) {
+  const safeVkId = Number(vkId);
+  const safePerkKey = String(
+    perkKey ?? ''
+  ).trim();
+
+  if (
+    !Number.isInteger(safeVkId) ||
+    safeVkId <= 0 ||
+    !/^[a-z0-9-]+$/.test(safePerkKey)
+  ) {
+    throw new Error(
+      'Некорректные данные перка'
+    );
+  }
+
+  return {
+    safeVkId,
+    safePerkKey
+  };
+}
+
+function getPerkStatus(
+  vkId,
+  perkKey,
+  currentTime = Date.now()
+) {
+  ensureDatabase();
+
+  const {
+    safeVkId,
+    safePerkKey
+  } = validatePerkIdentity(vkId, perkKey);
+  const safeCurrentTime = Number(currentTime);
+
+  if (
+    !Number.isSafeInteger(safeCurrentTime) ||
+    safeCurrentTime < 0
+  ) {
+    throw new Error(
+      'Некорректное время проверки перка'
+    );
+  }
+
+  const statement = db.prepare(`
+    SELECT
+      expires_at,
+      charges,
+      purchased_at
+    FROM user_perks
+    WHERE vk_id = ?
+      AND perk_key = ?
+  `);
+
+  statement.bind([
+    safeVkId,
+    safePerkKey
+  ]);
+  let row = null;
+
+  if (statement.step()) {
+    row = statement.getAsObject();
+  }
+
+  statement.free();
+
+  const expiresAt = Number(
+    row?.expires_at
+  ) || 0;
+  const active = expiresAt > safeCurrentTime;
+
+  return {
+    vkId: safeVkId,
+    perkKey: safePerkKey,
+    active,
+    expiresAt,
+    remainingMs: active
+      ? expiresAt - safeCurrentTime
+      : 0,
+    charges: active
+      ? Math.max(0, Number(row?.charges) || 0)
+      : 0,
+    purchasedAt:
+      Number(row?.purchased_at) || 0
+  };
+}
+
+function isPerkActive(
+  vkId,
+  perkKey,
+  currentTime = Date.now()
+) {
+  return getPerkStatus(
+    vkId,
+    perkKey,
+    currentTime
+  ).active;
+}
+
+function getActivePerkUserIds(
+  perkKey,
+  currentTime = Date.now()
+) {
+  ensureDatabase();
+
+  const {
+    safePerkKey
+  } = validatePerkIdentity(1, perkKey);
+  const safeCurrentTime = Number(currentTime);
+
+  if (
+    !Number.isSafeInteger(safeCurrentTime) ||
+    safeCurrentTime < 0
+  ) {
+    throw new Error(
+      'Некорректное время проверки перков'
+    );
+  }
+
+  const statement = db.prepare(`
+    SELECT vk_id
+    FROM user_perks
+    WHERE perk_key = ?
+      AND expires_at > ?
+    ORDER BY vk_id ASC
+  `);
+
+  statement.bind([
+    safePerkKey,
+    safeCurrentTime
+  ]);
+  const userIds = [];
+
+  while (statement.step()) {
+    const row = statement.getAsObject();
+    const vkId = Number(row.vk_id);
+
+    if (Number.isInteger(vkId) && vkId > 0) {
+      userIds.push(vkId);
+    }
+  }
+
+  statement.free();
+
+  return userIds;
+}
+
+function purchasePerk({
+  vkId,
+  perkKey,
+  price,
+  durationMs,
+  chargeAmount = 0,
+  currentTime = Date.now()
+}) {
+  ensureDatabase();
+
+  const {
+    safeVkId,
+    safePerkKey
+  } = validatePerkIdentity(vkId, perkKey);
+  const safePrice = Number(price);
+  const safeDurationMs = Number(durationMs);
+  const safeChargeAmount = Number(chargeAmount);
+  const safeCurrentTime = Number(currentTime);
+
+  if (
+    !Number.isSafeInteger(safePrice) ||
+    safePrice <= 0 ||
+    !Number.isSafeInteger(safeDurationMs) ||
+    safeDurationMs <= 0 ||
+    !Number.isSafeInteger(safeChargeAmount) ||
+    safeChargeAmount < 0 ||
+    !Number.isSafeInteger(safeCurrentTime) ||
+    safeCurrentTime < 0
+  ) {
+    throw new Error(
+      'Некорректные параметры покупки перка'
+    );
+  }
+
+  const current = getPerkStatus(
+    safeVkId,
+    safePerkKey,
+    safeCurrentTime
+  );
+
+  if (current.active) {
+    return {
+      status: 'already_active',
+      perkKey: safePerkKey,
+      expiresAt: current.expiresAt,
+      remainingMs: current.remainingMs,
+      charges: current.charges,
+      balance: getBalance(safeVkId)
+    };
+  }
+
+  const balance = getBalance(safeVkId);
+
+  if (balance < safePrice) {
+    return {
+      status: 'insufficient_funds',
+      price: safePrice,
+      balance,
+      missing: safePrice - balance
+    };
+  }
+
+  const expiresAt =
+    safeCurrentTime + safeDurationMs;
+  const charges = safeChargeAmount;
+
+  try {
+    db.run('BEGIN TRANSACTION;');
+
+    db.run(
+      `
+        UPDATE balances
+        SET dollars = dollars - ?
+        WHERE vk_id = ?
+          AND dollars >= ?
+      `,
+      [
+        safePrice,
+        safeVkId,
+        safePrice
+      ]
+    );
+
+    db.run(
+      `
+        INSERT INTO user_perks (
+          vk_id,
+          perk_key,
+          expires_at,
+          charges,
+          purchased_at
+        )
+        VALUES (?, ?, ?, ?, ?)
+
+        ON CONFLICT(vk_id, perk_key)
+        DO UPDATE SET
+          expires_at = excluded.expires_at,
+          charges = excluded.charges,
+          purchased_at = excluded.purchased_at
+      `,
+      [
+        safeVkId,
+        safePerkKey,
+        expiresAt,
+        charges,
+        safeCurrentTime
+      ]
+    );
+
+    db.run('COMMIT;');
+    persistDatabase();
+
+    return {
+      status: 'purchased',
+      perkKey: safePerkKey,
+      price: safePrice,
+      balance: balance - safePrice,
+      expiresAt,
+      remainingMs: expiresAt - safeCurrentTime,
+      charges
+    };
+  } catch (error) {
+    try {
+      db.run('ROLLBACK;');
+    } catch {
+      // Транзакция могла не успеть начаться.
+    }
+
+    throw error;
+  }
+}
+
+function consumePerkCharges({
+  vkId,
+  perkKey,
+  amount = 1,
+  currentTime = Date.now()
+}) {
+  ensureDatabase();
+
+  const {
+    safeVkId,
+    safePerkKey
+  } = validatePerkIdentity(vkId, perkKey);
+  const safeAmount = Number(amount);
+  const safeCurrentTime = Number(currentTime);
+
+  if (
+    !Number.isSafeInteger(safeAmount) ||
+    safeAmount <= 0 ||
+    !Number.isSafeInteger(safeCurrentTime) ||
+    safeCurrentTime < 0
+  ) {
+    throw new Error(
+      'Некорректное списание заряда перка'
+    );
+  }
+
+  const status = getPerkStatus(
+    safeVkId,
+    safePerkKey,
+    safeCurrentTime
+  );
+
+  if (!status.active) {
+    return {
+      status: 'inactive',
+      charges: 0
+    };
+  }
+
+  if (status.charges < safeAmount) {
+    return {
+      status: 'insufficient_charges',
+      charges: status.charges
+    };
+  }
+
+  const charges = status.charges - safeAmount;
+
+  db.run(
+    `
+      UPDATE user_perks
+      SET charges = ?
+      WHERE vk_id = ?
+        AND perk_key = ?
+    `,
+    [
+      charges,
+      safeVkId,
+      safePerkKey
+    ]
+  );
+
+  persistDatabase();
+
+  return {
+    status: 'consumed',
+    amount: safeAmount,
+    charges
+  };
+}
+
 function getMoscowDay(currentTime) {
   const safeCurrentTime = Number(currentTime);
 
@@ -1629,6 +2004,21 @@ function transferBalance({
       currentTime
     )
     : null;
+  const vipActive = isPerkActive(
+    safeSenderId,
+    'vip-card',
+    currentTime
+  );
+  const commissionBps = (
+    !enforceDailyLimit ||
+    vipActive
+  )
+    ? 0
+    : TRANSFER_COMMISSION_BPS;
+  const commission = Math.floor(
+    safeAmount * commissionBps / 10_000
+  );
+  const payout = safeAmount - commission;
 
   if (
     dailyTransfer &&
@@ -1646,7 +2036,7 @@ function transferBalance({
 
   if (
     recipientBalance >
-    Number.MAX_SAFE_INTEGER - safeAmount
+    Number.MAX_SAFE_INTEGER - payout
   ) {
     return {
       status: 'recipient_limit'
@@ -1684,7 +2074,7 @@ function transferBalance({
       `,
       [
         safeRecipientId,
-        safeAmount
+        payout
       ]
     );
 
@@ -1742,10 +2132,14 @@ function transferBalance({
     return {
       status: 'transferred',
       amount: safeAmount,
+      commission,
+      commissionBps,
+      payout,
+      vipActive,
       senderBalance:
         senderBalance - safeAmount,
       recipientBalance:
-        recipientBalance + safeAmount,
+        recipientBalance + payout,
       ...(dailyTransfer
         ? {
           dailyLimit: dailyTransfer.limit,
@@ -5215,11 +5609,24 @@ function previewBankWithdrawal({
     calculateBankWithdrawalCommission(
       safeAmount
     );
+  const vipActive = isPerkActive(
+    safeVkId,
+    'vip-card',
+    safeCurrentTime
+  );
+  const effectiveQuote = vipActive
+    ? {
+      ...quote,
+      commission: 0,
+      commissionBps: 0,
+      payout: safeAmount
+    }
+    : quote;
   const walletBalance = getBalance(safeVkId);
 
   if (
     walletBalance >
-    Number.MAX_SAFE_INTEGER - quote.payout
+    Number.MAX_SAFE_INTEGER - effectiveQuote.payout
   ) {
     return {
       status: 'balance_limit',
@@ -5231,9 +5638,10 @@ function previewBankWithdrawal({
   return {
     status: 'ready',
     amount: safeAmount,
-    commission: quote.commission,
-    commissionBps: quote.commissionBps,
-    payout: quote.payout,
+    commission: effectiveQuote.commission,
+    commissionBps: effectiveQuote.commissionBps,
+    payout: effectiveQuote.payout,
+    vipActive,
     bankBalance: account.balance,
     balance: walletBalance,
     interestCredited:
@@ -9621,6 +10029,11 @@ module.exports = {
   addBalance,
   changeBalance,
   removeBalance,
+  getPerkStatus,
+  isPerkActive,
+  getActivePerkUserIds,
+  purchasePerk,
+  consumePerkCharges,
   TRANSFER_DAILY_LIMIT,
   getDailyTransferUsage,
   transferBalance,

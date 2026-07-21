@@ -3,6 +3,7 @@ const { Keyboard } = require('vk-io');
 const {
   formatMoney,
   getBalance,
+  isPerkActive,
   getBankAccount,
   depositBankFunds,
   previewBankWithdrawal,
@@ -178,6 +179,10 @@ async function sendBankHome(context) {
   const vkId = Number(context.senderId);
   const account = getBankAccount(vkId);
   const walletBalance = getBalance(vkId);
+  const vipActive = isPerkActive(
+    vkId,
+    'vip-card'
+  );
   const creditedText =
     account.interestCredited > 0
       ? (
@@ -204,7 +209,10 @@ async function sendBankHome(context) {
       'Проценты копятся максимум за 72 часа отсутствия.\n\n' +
       'Комиссия при снятии:\n' +
       '• меньше 100.000 ₽ — без комиссии\n' +
-      '• от 100.000 ₽ — около 10% часового дохода снимаемой суммы\n\n' +
+      '• от 100.000 ₽ — около 10% часового дохода снимаемой суммы\n' +
+      (vipActive
+        ? '💼 VIP-карта активна: комиссия 0%\n\n'
+        : '\n') +
       'Команды:\n' +
       '!банк положить [сумма/всё]\n' +
       '!банк снять [сумма/всё]',
@@ -344,6 +352,9 @@ async function requestWithdrawal(
       `➖ Сумма: ${formatMoney(result.amount)} ₽\n` +
       `📊 Комиссия: ${formatPercentFromBps(result.commissionBps)}\n` +
       `💸 Комиссия банка: ${formatMoney(result.commission)} ₽\n` +
+      (result.vipActive
+        ? '💼 VIP-карта: комиссия полностью отменена.\n'
+        : '') +
       (
         result.commission > 0
           ? '🧾 Это около 10% часового дохода этой суммы.\n'

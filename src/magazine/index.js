@@ -436,6 +436,15 @@ function getProfileText(vkId) {
       );
     });
 
+  const collectibleTitles =
+    itemsByCategory.get('collectibles') ?? [];
+
+  if (collectibleTitles.length > 0) {
+    propertyLines.push(
+      `🎩 Коллекции — ${collectibleTitles.join(', ')}`
+    );
+  }
+
   const boostCount =
     getJobBoostCount(vkId);
 
@@ -781,6 +790,14 @@ async function buyItem(context, itemValue) {
     await context.send(
       '❌ Такой товар не найден.\n\n' +
       'Открыть магазин: !магазин'
+    );
+
+    return true;
+  }
+
+  if (item.caseExclusive) {
+    await context.send(
+      `❌ «${item.title}» нельзя купить в магазине — этот предмет выпадает только из кейса.`
     );
 
     return true;
