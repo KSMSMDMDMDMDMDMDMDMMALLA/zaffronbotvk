@@ -15,6 +15,9 @@ const {
 const {
   getItem
 } = require('../magazine/catalog');
+const {
+  blockIfOverdue
+} = require('../taxes');
 
 const BUSINESS_PAGE_SIZE = 7;
 
@@ -406,6 +409,15 @@ async function openBusiness(context, itemKey) {
 
 async function collectIncome(context, itemKey) {
   const vkId = Number(context.senderId);
+
+  if (await blockIfOverdue(
+    context,
+    vkId,
+    'business'
+  )) {
+    return true;
+  }
+
   const item = resolveOwnedBusiness(
     vkId,
     itemKey
@@ -461,6 +473,15 @@ async function collectIncome(context, itemKey) {
 
 async function collectAllIncome(context) {
   const vkId = Number(context.senderId);
+
+  if (await blockIfOverdue(
+    context,
+    vkId,
+    'business'
+  )) {
+    return true;
+  }
+
   const businesses =
     getOwnedBusinesses(vkId);
 

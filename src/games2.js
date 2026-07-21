@@ -4,7 +4,8 @@ const {
   removeBalance,
   applyGamePenalty,
   applyGameReward,
-  incrementQuestStat
+  incrementQuestStat,
+  recordTreasuryGameLoss
 } = require('./database');
 
 const crypto = require('node:crypto');
@@ -679,6 +680,15 @@ async function continueRocket(
       insuranceText =
         '\n🛡 Страховка не сработала: шанс 50/50.\n';
     }
+
+    const refunded =
+      perkInsurance.status === 'refunded'
+        ? perkInsurance.refund
+        : 0;
+
+    recordTreasuryGameLoss(
+      Math.max(0, game.bet - refunded)
+    );
 
     finishRocketGame(game);
 
@@ -2033,6 +2043,8 @@ async function playCasino(
       : {
         balance: getBalance(userId)
       };
+
+    recordTreasuryGameLoss(finalLoss);
 
     resultTitle = refunded > 0
       ? `🛡 Страховка вернула ${formatMoney(refunded)} ₽\n` +

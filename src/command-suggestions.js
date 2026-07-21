@@ -51,6 +51,13 @@ const COMMANDS = Object.freeze([
   { command: '!коробка', usage: '!коробка' },
   { command: '!кейсы', usage: '!кейсы' },
   { command: '!перки', usage: '!перки' },
+  { command: '!налоги', usage: '!налоги' },
+  { command: '!казна', usage: '!казна' },
+  {
+    command: '!кредит',
+    usage: '!кредит [сумма] | [цель] | [срок]',
+    acceptsArguments: true
+  },
   {
     command: '!кейс',
     usage: '!кейс [бронзовый/серебряный/алмазный/Platinum]',

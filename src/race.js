@@ -16,6 +16,9 @@ const {
 const {
   calculateCarTuning
 } = require('./tuning/catalog');
+const {
+  blockIfOverdue
+} = require('./taxes');
 
 const INVITE_TIMEOUT = 2 * 60 * 1000;
 
@@ -349,6 +352,14 @@ async function createRace(
     return sendUsage(context);
   }
 
+  if (await blockIfOverdue(
+    context,
+    challengerId,
+    'car'
+  )) {
+    return true;
+  }
+
   let opponent;
 
   try {
@@ -561,6 +572,14 @@ async function acceptRace(context, vk, race) {
       '❌ Этот вызов уже недоступен.'
     );
 
+    return true;
+  }
+
+  if (await blockIfOverdue(
+    context,
+    senderId,
+    'car'
+  )) {
     return true;
   }
 

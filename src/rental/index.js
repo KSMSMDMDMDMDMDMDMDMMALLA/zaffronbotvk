@@ -16,6 +16,9 @@ const {
 const {
   getRentalIncomePerHour
 } = require('../perks');
+const {
+  blockIfOverdue
+} = require('../taxes');
 
 const RENTAL_PAGE_SIZE = 6;
 
@@ -414,6 +417,15 @@ async function startRental(context, itemValue) {
 
 async function collectRent(context, itemValue) {
   const vkId = Number(context.senderId);
+
+  if (await blockIfOverdue(
+    context,
+    vkId,
+    'property'
+  )) {
+    return true;
+  }
+
   const item = resolveOwnedProperty(
     vkId,
     itemValue
@@ -490,6 +502,15 @@ async function collectRent(context, itemValue) {
 
 async function collectAllRent(context) {
   const vkId = Number(context.senderId);
+
+  if (await blockIfOverdue(
+    context,
+    vkId,
+    'property'
+  )) {
+    return true;
+  }
+
   const properties =
     getOwnedProperties(vkId);
 

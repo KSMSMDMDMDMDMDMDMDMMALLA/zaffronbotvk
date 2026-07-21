@@ -34,8 +34,10 @@ const quests = require('./quests');
 const race = require('./race');
 const rental = require('./rental');
 const roleplay = require('./rp');
+const taxes = require('./taxes');
 const transfer = require('./transfer');
 const travel = require('./travel');
+const treasury = require('./treasury');
 const tuning = require('./tuning');
 const {
   MAX_VOICE_TEXT_LENGTH,
@@ -93,6 +95,8 @@ const userTrackTimes = new Map();
 
 const commandHandlers = [
   admin,
+  treasury,
+  taxes,
   phone,
   memduel,
   meme,
@@ -440,6 +444,8 @@ function getCommandsSectionText(section) {
       '📱 !телефон — телефон и звонки\n' +
       '🎁 !кейсы — платные кейсы и склад лута\n' +
       '🧩 !перки — полезные временные улучшения\n' +
+      '🧾 !налоги — налоги на имущество\n' +
+      '🏛 !казна — казна и кредиты\n' +
       '📋 !команды — разделы',
     earnings:
       '💵 Заработок\n\n' +
@@ -1242,7 +1248,7 @@ async function start() {
   await vk.updates.start();
 
   console.log('Zaffron запущен и ждёт сообщения.');
-  console.log('Сборка: perks-lock-blue-v3');
+  console.log('Сборка: treasury-admin-games-v3');
   console.log('Интерфейс команд: 4 раздела, сборка 19.07.2026.');
 
   return vk;

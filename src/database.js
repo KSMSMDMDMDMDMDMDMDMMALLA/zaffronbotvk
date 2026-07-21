@@ -432,6 +432,143 @@ async function initializeDatabase() {
   `);
 
   db.run(`
+    CREATE TABLE IF NOT EXISTS tax_accounts (
+      vk_id INTEGER NOT NULL,
+      tax_key TEXT NOT NULL,
+      debt INTEGER NOT NULL DEFAULT 0,
+      last_accrued_at INTEGER NOT NULL,
+      total_paid INTEGER NOT NULL DEFAULT 0,
+
+      PRIMARY KEY (vk_id, tax_key),
+
+      CHECK (debt >= 0),
+      CHECK (last_accrued_at >= 0),
+      CHECK (total_paid >= 0)
+    );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS treasury (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      balance INTEGER NOT NULL DEFAULT 0,
+      total_taxes INTEGER NOT NULL DEFAULT 0,
+      total_transfer_commissions INTEGER NOT NULL DEFAULT 0,
+      total_bank_commissions INTEGER NOT NULL DEFAULT 0,
+      total_loan_repayments INTEGER NOT NULL DEFAULT 0,
+      total_loans_issued INTEGER NOT NULL DEFAULT 0,
+      total_admin_deposits INTEGER NOT NULL DEFAULT 0,
+      total_admin_withdrawals INTEGER NOT NULL DEFAULT 0,
+      total_game_losses INTEGER NOT NULL DEFAULT 0,
+
+      CHECK (balance >= 0),
+      CHECK (total_taxes >= 0),
+      CHECK (total_transfer_commissions >= 0),
+      CHECK (total_bank_commissions >= 0),
+      CHECK (total_loan_repayments >= 0),
+      CHECK (total_loans_issued >= 0),
+      CHECK (total_admin_deposits >= 0),
+      CHECK (total_admin_withdrawals >= 0),
+      CHECK (total_game_losses >= 0)
+    );
+  `);
+
+  db.run(`
+    INSERT OR IGNORE INTO treasury (id)
+    VALUES (1);
+  `);
+
+  const treasuryColumns = db.prepare(`
+    PRAGMA table_info(treasury)
+  `);
+  let hasTreasuryAdminDeposits = false;
+  let hasTreasuryAdminWithdrawals = false;
+  let hasTreasuryGameLosses = false;
+
+  while (treasuryColumns.step()) {
+    const column = treasuryColumns.getAsObject();
+
+    if (column.name === 'total_admin_deposits') {
+      hasTreasuryAdminDeposits = true;
+    }
+
+    if (column.name === 'total_admin_withdrawals') {
+      hasTreasuryAdminWithdrawals = true;
+    }
+
+    if (column.name === 'total_game_losses') {
+      hasTreasuryGameLosses = true;
+    }
+  }
+
+  treasuryColumns.free();
+
+  if (!hasTreasuryAdminDeposits) {
+    db.run(`
+      ALTER TABLE treasury
+      ADD COLUMN total_admin_deposits INTEGER NOT NULL DEFAULT 0;
+    `);
+  }
+
+  if (!hasTreasuryAdminWithdrawals) {
+    db.run(`
+      ALTER TABLE treasury
+      ADD COLUMN total_admin_withdrawals INTEGER NOT NULL DEFAULT 0;
+    `);
+  }
+
+  if (!hasTreasuryGameLosses) {
+    db.run(`
+      ALTER TABLE treasury
+      ADD COLUMN total_game_losses INTEGER NOT NULL DEFAULT 0;
+    `);
+  }
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS treasury_credit_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      vk_id INTEGER NOT NULL,
+      amount INTEGER NOT NULL,
+      purpose TEXT NOT NULL,
+      repayment_text TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at INTEGER NOT NULL,
+      reviewed_by INTEGER,
+      reviewed_at INTEGER,
+
+      CHECK (amount > 0),
+      CHECK (status IN ('pending', 'approved', 'rejected'))
+    );
+  `);
+
+  db.run(`
+    CREATE INDEX IF NOT EXISTS treasury_credit_pending_index
+    ON treasury_credit_requests (vk_id, status);
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS treasury_loans (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      request_id INTEGER NOT NULL UNIQUE,
+      vk_id INTEGER NOT NULL,
+      principal INTEGER NOT NULL,
+      remaining INTEGER NOT NULL,
+      repayment_text TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      approved_at INTEGER NOT NULL,
+      repaid_at INTEGER,
+
+      CHECK (principal > 0),
+      CHECK (remaining >= 0),
+      CHECK (status IN ('active', 'repaid'))
+    );
+  `);
+
+  db.run(`
+    CREATE INDEX IF NOT EXISTS treasury_loans_user_index
+    ON treasury_loans (vk_id, status);
+  `);
+
+  db.run(`
     CREATE TABLE IF NOT EXISTS business_states (
       vk_id INTEGER NOT NULL,
       item_key TEXT NOT NULL,
@@ -1882,6 +2019,829 @@ function consumePerkCharges({
   };
 }
 
+function validateTaxIdentity(vkId, taxKey) {
+  const safeVkId = Number(vkId);
+  const safeTaxKey = String(taxKey ?? '').trim();
+
+  if (
+    !Number.isInteger(safeVkId) ||
+    safeVkId <= 0 ||
+    !/^[a-z][a-z-]{1,31}$/.test(safeTaxKey)
+  ) {
+    throw new Error('Некорректные данны налога');
+  }
+
+  return { safeVkId, safeTaxKey };
+}
+
+function getTaxAccount(
+  vkId,
+  taxKey,
+  currentTime = Date.now()
+) {
+  ensureDatabase();
+
+  const { safeVkId, safeTaxKey } =
+    validateTaxIdentity(vkId, taxKey);
+  const safeCurrentTime = Number(currentTime);
+
+  if (
+    !Number.isSafeInteger(safeCurrentTime) ||
+    safeCurrentTime < 0
+  ) {
+    throw new Error('Некорректное время налога');
+  }
+
+  let statement = db.prepare(`
+    SELECT debt, last_accrued_at, total_paid
+    FROM tax_accounts
+    WHERE vk_id = ? AND tax_key = ?
+  `);
+  statement.bind([safeVkId, safeTaxKey]);
+  let account = null;
+
+  if (statement.step()) {
+    const row = statement.getAsObject();
+    account = {
+      vkId: safeVkId,
+      taxKey: safeTaxKey,
+      debt: Number(row.debt) || 0,
+      lastAccruedAt:
+        Number(row.last_accrued_at) || safeCurrentTime,
+      totalPaid: Number(row.total_paid) || 0
+    };
+  }
+
+  statement.free();
+
+  if (account) {
+    return account;
+  }
+
+  db.run(
+    `
+      INSERT INTO tax_accounts (
+        vk_id, tax_key, last_accrued_at
+      ) VALUES (?, ?, ?)
+    `,
+    [safeVkId, safeTaxKey, safeCurrentTime]
+  );
+  persistDatabase();
+
+  return {
+    vkId: safeVkId,
+    taxKey: safeTaxKey,
+    debt: 0,
+    lastAccruedAt: safeCurrentTime,
+    totalPaid: 0
+  };
+}
+
+function accrueTaxDebt({
+  vkId,
+  taxKey,
+  periodAmount,
+  periodMs = DAY_MS,
+  maxAccrualPeriods = 3,
+  currentTime = Date.now()
+}) {
+  const safePeriodAmount = Number(periodAmount);
+  const safePeriodMs = Number(periodMs);
+  const safeMaxPeriods = Number(maxAccrualPeriods);
+  const safeCurrentTime = Number(currentTime);
+
+  if (
+    !Number.isSafeInteger(safePeriodAmount) ||
+    safePeriodAmount < 0 ||
+    !Number.isSafeInteger(safePeriodMs) ||
+    safePeriodMs <= 0 ||
+    !Number.isInteger(safeMaxPeriods) ||
+    safeMaxPeriods < 1 ||
+    !Number.isSafeInteger(safeCurrentTime) ||
+    safeCurrentTime < 0
+  ) {
+    throw new Error('Некорректное начисление налога');
+  }
+
+  const account = getTaxAccount(
+    vkId,
+    taxKey,
+    safeCurrentTime
+  );
+  const elapsedPeriods = Math.floor(
+    Math.max(
+      0,
+      safeCurrentTime - account.lastAccruedAt
+    ) / safePeriodMs
+  );
+
+  if (elapsedPeriods <= 0) {
+    return {
+      ...account,
+      periodAmount: safePeriodAmount,
+      accruedNow: 0,
+      elapsedPeriods: 0
+    };
+  }
+
+  const rawAccrual =
+    safePeriodAmount * elapsedPeriods;
+
+  if (!Number.isSafeInteger(rawAccrual)) {
+    throw new Error('Налог превышает технический лимит');
+  }
+
+  const maximumDebt = Math.max(
+    account.debt,
+    safePeriodAmount * safeMaxPeriods
+  );
+  const debt = Math.min(
+    maximumDebt,
+    account.debt + rawAccrual
+  );
+  const accruedNow = debt - account.debt;
+  const lastAccruedAt =
+    account.lastAccruedAt +
+    elapsedPeriods * safePeriodMs;
+
+  db.run(
+    `
+      UPDATE tax_accounts
+      SET debt = ?, last_accrued_at = ?
+      WHERE vk_id = ? AND tax_key = ?
+    `,
+    [debt, lastAccruedAt, account.vkId, account.taxKey]
+  );
+  persistDatabase();
+
+  return {
+    ...account,
+    debt,
+    lastAccruedAt,
+    periodAmount: safePeriodAmount,
+    accruedNow,
+    elapsedPeriods
+  };
+}
+
+const TREASURY_SOURCE_COLUMNS = Object.freeze({
+  taxes: 'total_taxes',
+  transferCommission: 'total_transfer_commissions',
+  bankCommission: 'total_bank_commissions',
+  loanRepayment: 'total_loan_repayments',
+  gameLoss: 'total_game_losses'
+});
+
+function creditTreasuryInternal(amount, source) {
+  const safeAmount = Number(amount);
+  const column = TREASURY_SOURCE_COLUMNS[source];
+
+  if (
+    !column ||
+    !Number.isSafeInteger(safeAmount) ||
+    safeAmount < 0
+  ) {
+    throw new Error('Некорректное пополнение казны');
+  }
+
+  if (safeAmount === 0) {
+    return;
+  }
+
+  db.run(
+    `
+      UPDATE treasury
+      SET balance = balance + ?, ${column} = ${column} + ?
+      WHERE id = 1
+    `,
+    [safeAmount, safeAmount]
+  );
+}
+
+function getTreasuryState() {
+  ensureDatabase();
+
+  const statement = db.prepare(`
+    SELECT
+      balance,
+      total_taxes,
+      total_transfer_commissions,
+      total_bank_commissions,
+      total_loan_repayments,
+      total_loans_issued,
+      total_admin_deposits,
+      total_admin_withdrawals,
+      total_game_losses
+    FROM treasury
+    WHERE id = 1
+  `);
+  let result = null;
+
+  if (statement.step()) {
+    const row = statement.getAsObject();
+    result = {
+      balance: Number(row.balance) || 0,
+      totalTaxes: Number(row.total_taxes) || 0,
+      totalTransferCommissions:
+        Number(row.total_transfer_commissions) || 0,
+      totalBankCommissions:
+        Number(row.total_bank_commissions) || 0,
+      totalLoanRepayments:
+        Number(row.total_loan_repayments) || 0,
+      totalLoansIssued:
+        Number(row.total_loans_issued) || 0,
+      totalAdminDeposits:
+        Number(row.total_admin_deposits) || 0,
+      totalAdminWithdrawals:
+        Number(row.total_admin_withdrawals) || 0,
+      totalGameLosses:
+        Number(row.total_game_losses) || 0
+    };
+  }
+
+  statement.free();
+
+  return result ?? {
+    balance: 0,
+    totalTaxes: 0,
+    totalTransferCommissions: 0,
+    totalBankCommissions: 0,
+    totalLoanRepayments: 0,
+    totalLoansIssued: 0,
+    totalAdminDeposits: 0,
+    totalAdminWithdrawals: 0,
+    totalGameLosses: 0
+  };
+}
+
+function recordTreasuryGameLoss(amount) {
+  ensureDatabase();
+  const safeAmount = Number(amount);
+
+  if (
+    !Number.isSafeInteger(safeAmount) ||
+    safeAmount < 0
+  ) {
+    throw new Error('Некорректный проигрыш для казны');
+  }
+
+  if (safeAmount === 0) {
+    return getTreasuryState();
+  }
+
+  const treasury = getTreasuryState();
+
+  if (
+    treasury.balance >
+    Number.MAX_SAFE_INTEGER - safeAmount
+  ) {
+    return {
+      ...treasury,
+      status: 'treasury_limit'
+    };
+  }
+
+  creditTreasuryInternal(
+    safeAmount,
+    'gameLoss'
+  );
+  persistDatabase();
+
+  return {
+    ...getTreasuryState(),
+    status: 'credited',
+    amount: safeAmount
+  };
+}
+
+function adjustTreasuryBalance({
+  adminId,
+  amount,
+  operation
+}) {
+  ensureDatabase();
+  const safeAdminId = Number(adminId);
+  const safeAmount = Number(amount);
+  const safeOperation = String(operation ?? '').trim();
+
+  if (
+    !Number.isInteger(safeAdminId) ||
+    safeAdminId <= 0 ||
+    !Number.isSafeInteger(safeAmount) ||
+    safeAmount <= 0 ||
+    !['deposit', 'withdraw'].includes(safeOperation)
+  ) {
+    throw new Error('Некорректное изменение казны');
+  }
+
+  const treasury = getTreasuryState();
+
+  if (safeOperation === 'deposit') {
+    if (
+      treasury.balance >
+      Number.MAX_SAFE_INTEGER - safeAmount
+    ) {
+      return { status: 'treasury_limit' };
+    }
+
+    db.run(
+      `
+        UPDATE treasury
+        SET balance = balance + ?,
+            total_admin_deposits = total_admin_deposits + ?
+        WHERE id = 1
+      `,
+      [safeAmount, safeAmount]
+    );
+    persistDatabase();
+
+    return {
+      status: 'deposited',
+      amount: safeAmount,
+      treasuryBalance: treasury.balance + safeAmount
+    };
+  }
+
+  if (treasury.balance < safeAmount) {
+    return {
+      status: 'insufficient_treasury',
+      treasuryBalance: treasury.balance,
+      missing: safeAmount - treasury.balance
+    };
+  }
+
+  const adminBalance = getBalance(safeAdminId);
+
+  if (
+    adminBalance >
+    Number.MAX_SAFE_INTEGER - safeAmount
+  ) {
+    return { status: 'admin_balance_limit' };
+  }
+
+  try {
+    db.run('BEGIN TRANSACTION;');
+    db.run(
+      `
+        UPDATE treasury
+        SET balance = balance - ?,
+            total_admin_withdrawals = total_admin_withdrawals + ?
+        WHERE id = 1
+      `,
+      [safeAmount, safeAmount]
+    );
+    db.run(
+      `
+        INSERT INTO balances (vk_id, dollars)
+        VALUES (?, ?)
+        ON CONFLICT(vk_id)
+        DO UPDATE SET dollars = dollars + excluded.dollars
+      `,
+      [safeAdminId, safeAmount]
+    );
+    db.run('COMMIT;');
+    persistDatabase();
+
+    return {
+      status: 'withdrawn',
+      amount: safeAmount,
+      treasuryBalance: treasury.balance - safeAmount,
+      adminBalance: adminBalance + safeAmount
+    };
+  } catch (error) {
+    try { db.run('ROLLBACK;'); } catch {}
+    throw error;
+  }
+}
+
+function payTaxDebts({ vkId, taxKeys }) {
+  ensureDatabase();
+
+  const safeVkId = Number(vkId);
+  const keys = [...new Set(
+    (Array.isArray(taxKeys) ? taxKeys : [])
+      .map(value => String(value ?? '').trim())
+  )];
+
+  if (
+    !Number.isInteger(safeVkId) ||
+    safeVkId <= 0 ||
+    keys.length === 0
+  ) {
+    throw new Error('Некорректная оплата налогов');
+  }
+
+  const debts = keys.map(taxKey =>
+    getTaxAccount(safeVkId, taxKey)
+  );
+  const amount = debts.reduce(
+    (total, item) => total + item.debt,
+    0
+  );
+
+  if (!Number.isSafeInteger(amount)) {
+    throw new Error('Долг по налогам слишком велик');
+  }
+
+  if (amount <= 0) {
+    return {
+      status: 'nothing_due',
+      amount: 0,
+      balance: getBalance(safeVkId)
+    };
+  }
+
+  const balance = getBalance(safeVkId);
+
+  if (balance < amount) {
+    return {
+      status: 'insufficient_funds',
+      amount,
+      balance,
+      missing: amount - balance
+    };
+  }
+
+  try {
+    db.run('BEGIN TRANSACTION;');
+    db.run(
+      'UPDATE balances SET dollars = dollars - ? WHERE vk_id = ?',
+      [amount, safeVkId]
+    );
+
+    for (const item of debts) {
+      db.run(
+        `
+          UPDATE tax_accounts
+          SET debt = 0, total_paid = total_paid + ?
+          WHERE vk_id = ? AND tax_key = ?
+        `,
+        [item.debt, safeVkId, item.taxKey]
+      );
+    }
+
+    creditTreasuryInternal(amount, 'taxes');
+    db.run('COMMIT;');
+    persistDatabase();
+
+    return {
+      status: 'paid',
+      amount,
+      balance: balance - amount,
+      treasuryBalance: getTreasuryState().balance,
+      paid: Object.fromEntries(
+        debts.map(item => [item.taxKey, item.debt])
+      )
+    };
+  } catch (error) {
+    try { db.run('ROLLBACK;'); } catch {}
+    throw error;
+  }
+}
+
+function getPendingCreditRequest(vkId) {
+  ensureDatabase();
+  const safeVkId = Number(vkId);
+  const statement = db.prepare(`
+    SELECT id, vk_id, amount, purpose, repayment_text, status, created_at
+    FROM treasury_credit_requests
+    WHERE vk_id = ? AND status = 'pending'
+    ORDER BY id DESC LIMIT 1
+  `);
+  statement.bind([safeVkId]);
+  let result = null;
+
+  if (statement.step()) {
+    const row = statement.getAsObject();
+    result = {
+      id: Number(row.id),
+      vkId: Number(row.vk_id),
+      amount: Number(row.amount),
+      purpose: String(row.purpose),
+      repaymentText: String(row.repayment_text),
+      status: String(row.status),
+      createdAt: Number(row.created_at)
+    };
+  }
+
+  statement.free();
+  return result;
+}
+
+function getActiveTreasuryLoan(vkId) {
+  ensureDatabase();
+  const safeVkId = Number(vkId);
+  const statement = db.prepare(`
+    SELECT id, request_id, vk_id, principal, remaining,
+           repayment_text, status, approved_at
+    FROM treasury_loans
+    WHERE vk_id = ? AND status = 'active'
+    ORDER BY id ASC LIMIT 1
+  `);
+  statement.bind([safeVkId]);
+  let result = null;
+
+  if (statement.step()) {
+    const row = statement.getAsObject();
+    result = {
+      id: Number(row.id),
+      requestId: Number(row.request_id),
+      vkId: Number(row.vk_id),
+      principal: Number(row.principal),
+      remaining: Number(row.remaining),
+      repaymentText: String(row.repayment_text),
+      status: String(row.status),
+      approvedAt: Number(row.approved_at)
+    };
+  }
+
+  statement.free();
+  return result;
+}
+
+function createTreasuryCreditRequest({
+  vkId,
+  amount,
+  purpose,
+  repaymentText,
+  currentTime = Date.now()
+}) {
+  ensureDatabase();
+  const safeVkId = Number(vkId);
+  const safeAmount = Number(amount);
+  const safePurpose = String(purpose ?? '').trim();
+  const safeRepayment = String(repaymentText ?? '').trim();
+  const safeCurrentTime = Number(currentTime);
+
+  if (
+    !Number.isInteger(safeVkId) || safeVkId <= 0 ||
+    !Number.isSafeInteger(safeAmount) || safeAmount <= 0 ||
+    safePurpose.length < 3 || safePurpose.length > 500 ||
+    safeRepayment.length < 2 || safeRepayment.length > 100 ||
+    !Number.isSafeInteger(safeCurrentTime)
+  ) {
+    throw new Error('Некорректная заявка на кредит');
+  }
+
+  const profile = getJobProfile(safeVkId);
+
+  if (profile.level < 5) {
+    return {
+      status: 'level_required',
+      currentLevel: profile.level,
+      requiredLevel: 5
+    };
+  }
+
+  const pending = getPendingCreditRequest(safeVkId);
+  if (pending) {
+    return { status: 'pending_exists', request: pending };
+  }
+
+  const loan = getActiveTreasuryLoan(safeVkId);
+  if (loan) {
+    return { status: 'active_loan', loan };
+  }
+
+  db.run(
+    `
+      INSERT INTO treasury_credit_requests (
+        vk_id, amount, purpose, repayment_text, created_at
+      ) VALUES (?, ?, ?, ?, ?)
+    `,
+    [safeVkId, safeAmount, safePurpose, safeRepayment, safeCurrentTime]
+  );
+  const statement = db.prepare(
+    'SELECT last_insert_rowid() AS id'
+  );
+  statement.step();
+  const id = Number(statement.getAsObject().id);
+  statement.free();
+  persistDatabase();
+
+  return {
+    status: 'created',
+    request: {
+      id,
+      vkId: safeVkId,
+      amount: safeAmount,
+      purpose: safePurpose,
+      repaymentText: safeRepayment,
+      createdAt: safeCurrentTime,
+      status: 'pending'
+    }
+  };
+}
+
+function getTreasuryCreditRequest(requestId) {
+  ensureDatabase();
+  const safeId = Number(requestId);
+  const statement = db.prepare(`
+    SELECT id, vk_id, amount, purpose, repayment_text, status,
+           created_at, reviewed_by, reviewed_at
+    FROM treasury_credit_requests
+    WHERE id = ?
+  `);
+  statement.bind([safeId]);
+  let result = null;
+
+  if (statement.step()) {
+    const row = statement.getAsObject();
+    result = {
+      id: Number(row.id),
+      vkId: Number(row.vk_id),
+      amount: Number(row.amount),
+      purpose: String(row.purpose),
+      repaymentText: String(row.repayment_text),
+      status: String(row.status),
+      createdAt: Number(row.created_at),
+      reviewedBy: row.reviewed_by == null
+        ? null : Number(row.reviewed_by),
+      reviewedAt: row.reviewed_at == null
+        ? null : Number(row.reviewed_at)
+    };
+  }
+
+  statement.free();
+  return result;
+}
+
+function decideTreasuryCreditRequest({
+  requestId,
+  adminId,
+  approved,
+  currentTime = Date.now()
+}) {
+  ensureDatabase();
+  const request = getTreasuryCreditRequest(requestId);
+  const safeAdminId = Number(adminId);
+  const safeCurrentTime = Number(currentTime);
+
+  if (!request) return { status: 'not_found' };
+  if (request.status !== 'pending') {
+    return { status: 'already_reviewed', request };
+  }
+
+  if (!approved) {
+    db.run(
+      `
+        UPDATE treasury_credit_requests
+        SET status = 'rejected', reviewed_by = ?, reviewed_at = ?
+        WHERE id = ? AND status = 'pending'
+      `,
+      [safeAdminId, safeCurrentTime, request.id]
+    );
+    persistDatabase();
+    return { status: 'rejected', request: { ...request, status: 'rejected' } };
+  }
+
+  const borrowerProfile = getJobProfile(
+    request.vkId
+  );
+
+  if (borrowerProfile.level < 5) {
+    return {
+      status: 'borrower_level_required',
+      request,
+      currentLevel: borrowerProfile.level,
+      requiredLevel: 5
+    };
+  }
+
+  const treasury = getTreasuryState();
+  if (treasury.balance < request.amount) {
+    return {
+      status: 'treasury_insufficient',
+      request,
+      treasuryBalance: treasury.balance,
+      missing: request.amount - treasury.balance
+    };
+  }
+
+  const userBalance = getBalance(request.vkId);
+  if (userBalance > Number.MAX_SAFE_INTEGER - request.amount) {
+    return { status: 'user_balance_limit', request };
+  }
+
+  try {
+    db.run('BEGIN TRANSACTION;');
+    db.run(
+      `
+        UPDATE treasury_credit_requests
+        SET status = 'approved', reviewed_by = ?, reviewed_at = ?
+        WHERE id = ? AND status = 'pending'
+      `,
+      [safeAdminId, safeCurrentTime, request.id]
+    );
+    db.run(
+      `
+        UPDATE treasury
+        SET balance = balance - ?,
+            total_loans_issued = total_loans_issued + ?
+        WHERE id = 1
+      `,
+      [request.amount, request.amount]
+    );
+    db.run(
+      `
+        INSERT INTO balances (vk_id, dollars)
+        VALUES (?, ?)
+        ON CONFLICT(vk_id)
+        DO UPDATE SET dollars = dollars + excluded.dollars
+      `,
+      [request.vkId, request.amount]
+    );
+    db.run(
+      `
+        INSERT INTO treasury_loans (
+          request_id, vk_id, principal, remaining,
+          repayment_text, approved_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `,
+      [
+        request.id, request.vkId, request.amount,
+        request.amount, request.repaymentText, safeCurrentTime
+      ]
+    );
+    db.run('COMMIT;');
+    persistDatabase();
+    return {
+      status: 'approved',
+      request: { ...request, status: 'approved' },
+      treasuryBalance: treasury.balance - request.amount,
+      userBalance: userBalance + request.amount
+    };
+  } catch (error) {
+    try { db.run('ROLLBACK;'); } catch {}
+    throw error;
+  }
+}
+
+function repayTreasuryLoan({ vkId, amount }) {
+  ensureDatabase();
+  const safeVkId = Number(vkId);
+  const loan = getActiveTreasuryLoan(safeVkId);
+
+  if (!loan) return { status: 'no_active_loan' };
+
+  const requested = amount === 'all'
+    ? loan.remaining
+    : Number(amount);
+
+  if (!Number.isSafeInteger(requested) || requested <= 0) {
+    throw new Error('Некорректная сумма погашения');
+  }
+
+  const payment = Math.min(requested, loan.remaining);
+  const balance = getBalance(safeVkId);
+
+  if (balance < payment) {
+    return {
+      status: 'insufficient_funds',
+      payment,
+      balance,
+      missing: payment - balance,
+      loan
+    };
+  }
+
+  const remaining = loan.remaining - payment;
+
+  try {
+    db.run('BEGIN TRANSACTION;');
+    db.run(
+      'UPDATE balances SET dollars = dollars - ? WHERE vk_id = ?',
+      [payment, safeVkId]
+    );
+    db.run(
+      `
+        UPDATE treasury_loans
+        SET remaining = ?, status = ?, repaid_at = ?
+        WHERE id = ?
+      `,
+      [
+        remaining,
+        remaining === 0 ? 'repaid' : 'active',
+        remaining === 0 ? Date.now() : null,
+        loan.id
+      ]
+    );
+    creditTreasuryInternal(payment, 'loanRepayment');
+    db.run('COMMIT;');
+    persistDatabase();
+    return {
+      status: remaining === 0 ? 'repaid' : 'partially_repaid',
+      payment,
+      remaining,
+      balance: balance - payment,
+      treasuryBalance: getTreasuryState().balance
+    };
+  } catch (error) {
+    try { db.run('ROLLBACK;'); } catch {}
+    throw error;
+  }
+}
+
 function getMoscowDay(currentTime) {
   const safeCurrentTime = Number(currentTime);
 
@@ -2076,6 +3036,11 @@ function transferBalance({
         safeRecipientId,
         payout
       ]
+    );
+
+    creditTreasuryInternal(
+      commission,
+      'transferCommission'
     );
 
     if (dailyTransfer) {
@@ -5704,6 +6669,11 @@ function withdrawBankFunds({
         safeVkId,
         quote.payout
       ]
+    );
+
+    creditTreasuryInternal(
+      quote.commission,
+      'bankCommission'
     );
 
     db.run('COMMIT;');
@@ -10034,6 +11004,18 @@ module.exports = {
   getActivePerkUserIds,
   purchasePerk,
   consumePerkCharges,
+  getTaxAccount,
+  accrueTaxDebt,
+  payTaxDebts,
+  getTreasuryState,
+  recordTreasuryGameLoss,
+  adjustTreasuryBalance,
+  getPendingCreditRequest,
+  getActiveTreasuryLoan,
+  createTreasuryCreditRequest,
+  getTreasuryCreditRequest,
+  decideTreasuryCreditRequest,
+  repayTreasuryLoan,
   TRANSFER_DAILY_LIMIT,
   getDailyTransferUsage,
   transferBalance,

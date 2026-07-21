@@ -389,6 +389,9 @@ const ADMIN_SECTION_TEXTS = Object.freeze({
     '\\minus₽ @username [сумма]\n' +
     '\\set₽ @username [сумма]\n' +
     '\\reset₽ @username\n\n' +
+    'Казна:\n' +
+    '\\казна пополнить [сумма]\n' +
+    '\\казна снять [сумма/всё]\n\n' +
     'Аура:\n' +
     '\\add @username [количество]\n' +
     '\\minus @username [количество]\n' +
@@ -1814,5 +1817,7 @@ async function handle(
 }
 
 module.exports = {
-  handle
+  handle,
+  isAdmin,
+  getAdminIds: () => [...ADMIN_IDS]
 };

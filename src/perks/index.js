@@ -29,6 +29,9 @@ const {
   PERKS,
   getPerk
 } = require('./catalog');
+const {
+  getCategoryTaxStatus
+} = require('../taxes');
 
 const ASSISTANT_INTERVAL_MS =
   60 * 1000;
@@ -412,10 +415,23 @@ async function runAssistantForUser(
   }
 
   const assets = getOwnedIncomeAssets(vkId);
+  const businessTax = getCategoryTaxStatus(
+    vkId,
+    'business',
+    currentTime
+  );
+  const propertyTax = getCategoryTaxStatus(
+    vkId,
+    'property',
+    currentTime
+  );
   let businessPayout = 0;
   let rentPayout = 0;
 
-  if (assets.businesses.length > 0) {
+  if (
+    assets.businesses.length > 0 &&
+    !businessTax.overdue
+  ) {
     const result = collectAllBusinessIncome({
       vkId,
       businesses: assets.businesses.map(item => ({
@@ -430,7 +446,10 @@ async function runAssistantForUser(
     }
   }
 
-  if (assets.properties.length > 0) {
+  if (
+    assets.properties.length > 0 &&
+    !propertyTax.overdue
+  ) {
     const result = collectAllPropertyRent({
       vkId,
       properties: assets.properties.map(item => ({
